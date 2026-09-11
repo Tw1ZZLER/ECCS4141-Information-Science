@@ -20,11 +20,13 @@ pub const H: [3][7]Bit = .{
     .{ 0, 0, 1, 1, 1, 1, 0 },
 };
 
+// the zigisms
 pub const ParseError = error{
     WrongLength,
     NonBinaryDigit,
 };
 
+// parsing zig style
 pub fn parseMessage(text: []const u8) ParseError!Message {
     if (text.len != 4) return error.WrongLength;
 
@@ -41,6 +43,9 @@ pub fn parseMessage(text: []const u8) ParseError!Message {
 
 pub fn encode(message: Message) Codeword {
     var codeword: Codeword = @splat(0);
+
+    // U = m * G
+    // codeword = message * G
     for (0..G[0].len) |column| {
         for (0..message.len) |row| {
             codeword[column] ^= message[row] & G[row][column];
@@ -52,6 +57,8 @@ pub fn encode(message: Message) Codeword {
 /// Flip a zero-based codeword position. Null models a channel with no error.
 pub fn transmit(codeword: Codeword, error_index: ?usize) error{InvalidBitPosition}!Codeword {
     var received = codeword;
+
+    // add error to U, e + U
     if (error_index) |index| {
         if (index >= received.len) return error.InvalidBitPosition;
         received[index] ^= 1;
@@ -61,6 +68,9 @@ pub fn transmit(codeword: Codeword, error_index: ?usize) error{InvalidBitPositio
 
 pub fn calculateSyndrome(received: Codeword) Syndrome {
     var result: Syndrome = @splat(0);
+
+    // S = (e + U) * H
+    // syndrome = error-ed codeword * H
     for (0..H.len) |row| {
         for (0..received.len) |column| {
             result[row] ^= received[column] & H[row][column];
@@ -89,9 +99,4 @@ pub fn correct(received: Codeword, syndrome: Syndrome) Codeword {
 
 pub fn recoverMessage(corrected: Codeword) Message {
     return corrected[3..7].*;
-}
-
-pub fn writeBits(comptime length: usize, bits: [length]Bit, output: *[length]u8) []const u8 {
-    for (bits, 0..) |bit, index| output[index] = if (bit == 0) '0' else '1';
-    return output;
 }
