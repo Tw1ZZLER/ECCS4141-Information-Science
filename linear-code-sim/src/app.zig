@@ -36,6 +36,14 @@ pub const Model = struct {
     choice_row: i16 = -1,
     choice_starts: [8]u16 = @splat(0),
     choice_ends: [8]u16 = @splat(0),
+    parse_ns: u64 = 0,
+    encode_ns: u64 = 0,
+    transmit_ns: u64 = 0,
+    syndrome_ns: u64 = 0,
+    locate_ns: u64 = 0,
+    correct_ns: u64 = 0,
+    recover_ns: u64 = 0,
+    detected_error: ?usize = null,
 
     pub fn widget(self: *Model) vxfw.Widget {
         return .{
@@ -49,30 +57,51 @@ pub const Model = struct {
         self.* = .{};
     }
 
-    fn advance(self: *Model) void {
+    fn advance(self: *Model, io: std.Io) void {
         switch (self.stage) {
             .message => {
                 if (self.input_len != self.input.len) {
                     self.input_error = true;
                     return;
                 }
+                const parse_start = std.Io.Clock.awake.now(io);
                 self.message = code.parseMessage(self.input[0..]) catch {
+                    self.parse_ns = elapsedNanoseconds(parse_start, io);
                     self.input_error = true;
                     return;
                 };
+                self.parse_ns = elapsedNanoseconds(parse_start, io);
+
+                const encode_start = std.Io.Clock.awake.now(io);
                 self.codeword = code.encode(self.message);
+                self.encode_ns = elapsedNanoseconds(encode_start, io);
                 self.stage = .channel;
                 self.input_error = false;
             },
             .channel => {
                 const error_index: ?usize = if (self.error_choice == 0) null else self.error_choice - 1;
+
+                const transmit_start = std.Io.Clock.awake.now(io);
                 self.received = code.transmit(self.codeword, error_index) catch unreachable;
+                self.transmit_ns = elapsedNanoseconds(transmit_start, io);
+
+                const syndrome_start = std.Io.Clock.awake.now(io);
                 self.syndrome = code.calculateSyndrome(self.received);
+                self.syndrome_ns = elapsedNanoseconds(syndrome_start, io);
+
+                const locate_start = std.Io.Clock.awake.now(io);
+                self.detected_error = code.locateError(self.syndrome);
+                self.locate_ns = elapsedNanoseconds(locate_start, io);
                 self.stage = .diagnosis;
             },
             .diagnosis => {
+                const correct_start = std.Io.Clock.awake.now(io);
                 self.corrected = code.correct(self.received, self.syndrome);
+                self.correct_ns = elapsedNanoseconds(correct_start, io);
+
+                const recover_start = std.Io.Clock.awake.now(io);
                 self.recovered = code.recoverMessage(self.corrected);
+                self.recover_ns = elapsedNanoseconds(recover_start, io);
                 self.stage = .correction;
             },
             .correction => {},
@@ -107,7 +136,7 @@ pub const Model = struct {
                     }
                     self.input_error = false;
                 } else if (key.matches(vaxis.Key.enter, .{})) {
-                    self.advance();
+                    self.advance(ctx.io);
                 } else if (key.matches('0', .{}) or key.matches('1', .{})) {
                     if (self.input_len < self.input.len) {
                         self.input[self.input_len] = if (key.matches('0', .{})) '0' else '1';
@@ -126,7 +155,7 @@ pub const Model = struct {
                 } else if (key.matches(vaxis.Key.right, .{}) or key.matches(vaxis.Key.down, .{}) or key.matches('l', .{})) {
                     self.selectNextError();
                 } else if (key.matches(vaxis.Key.enter, .{}) or key.matches(vaxis.Key.space, .{})) {
-                    self.advance();
+                    self.advance(ctx.io);
                 } else {
                     for (0..8) |choice| {
                         const digit: u21 = @intCast('0' + choice);
@@ -139,7 +168,7 @@ pub const Model = struct {
             },
             .diagnosis => {
                 if (key.matches(vaxis.Key.enter, .{}) or key.matches(vaxis.Key.space, .{}) or key.matches('c', .{})) {
-                    self.advance();
+                    self.advance(ctx.io);
                 }
             },
             .correction => {},
@@ -183,7 +212,31 @@ pub const Model = struct {
             const cursor_column: u16 = @intCast(@min(12 + self.input_len * 4, @as(usize, size.width - 1)));
             surface.cursor = .{ .row = 5, .col = cursor_column, .shape = .beam };
         }
+        self.drawPerformance(surface, ctx);
         return surface;
+    }
+
+    fn drawPerformance(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
+        if (surface.size.height == 0) return;
+        const text = switch (self.stage) {
+            .message => "Performance: waiting for first calculation",
+            .channel => std.fmt.allocPrint(
+                ctx.arena,
+                "Performance: parse {d} ns | encode {d} ns",
+                .{ self.parse_ns, self.encode_ns },
+            ) catch return,
+            .diagnosis => std.fmt.allocPrint(
+                ctx.arena,
+                "Performance: transmit {d} ns | syndrome {d} ns | locate {d} ns",
+                .{ self.transmit_ns, self.syndrome_ns, self.locate_ns },
+            ) catch return,
+            .correction => std.fmt.allocPrint(
+                ctx.arena,
+                "Performance: correct {d} ns | recover {d} ns",
+                .{ self.correct_ns, self.recover_ns },
+            ) catch return,
+        };
+        putText(surface, 1, surface.size.height - 1, text, title_style);
     }
 
     fn drawFull(self: *Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
@@ -242,7 +295,7 @@ pub const Model = struct {
         putText(surface, 2, 16, "[3] RECEIVER / SYNDROME DECODER", section_style);
         putText(surface, 2, 17, "S = rH^T =", normal);
         putBits(surface, 14, 17, self.syndrome, null, warning_style);
-        if (code.locateError(self.syndrome)) |index| {
+        if (self.detected_error) |index| {
             const text = std.fmt.allocPrint(ctx.arena, "S matches column {d} of H -> error at bit {d}.", .{ index + 1, index + 1 }) catch return;
             putText(surface, 2, 18, text, error_style);
         } else {
@@ -255,11 +308,11 @@ pub const Model = struct {
             return;
         }
 
-        putText(surface, 2, 20, "Corrected:  ", normal);
-        putBits(surface, 15, 20, self.corrected, null, success_style);
-        putText(surface, 2, 21, "Recovered m:", normal);
-        putBits(surface, 15, 21, self.recovered, null, success_style);
-        putText(surface, 35, 21, "positions 4-7", muted_style);
+        putText(surface, 2, 19, "Corrected:  ", normal);
+        putBits(surface, 15, 19, self.corrected, null, success_style);
+        putText(surface, 2, 20, "Recovered m:", normal);
+        putBits(surface, 15, 20, self.recovered, null, success_style);
+        putText(surface, 35, 20, "positions 4-7", muted_style);
         drawFooter(surface, "Simulation complete  r new message  q quit");
     }
 
@@ -307,7 +360,7 @@ pub const Model = struct {
         putBits(surface, 4, 8, self.received, if (self.error_choice == 0) null else self.error_choice - 1, changed_style);
         putText(surface, 1, 10, "S:", normal);
         putBits(surface, 4, 10, self.syndrome, null, warning_style);
-        if (code.locateError(self.syndrome)) |index| {
+        if (self.detected_error) |index| {
             const diagnosis = std.fmt.allocPrint(ctx.arena, "Error located at bit {d}.", .{index + 1}) catch return;
             putText(surface, 1, 12, diagnosis, error_style);
         } else {
@@ -317,10 +370,10 @@ pub const Model = struct {
             drawFooter(surface, "Enter correct  r reset  q quit");
             return;
         }
-        putText(surface, 1, 14, "fixed:", normal);
-        putBits(surface, 8, 14, self.corrected, null, success_style);
-        putText(surface, 1, 16, "message:", normal);
-        putBits(surface, 10, 16, self.recovered, null, success_style);
+        putText(surface, 1, 13, "fixed:", normal);
+        putBits(surface, 8, 13, self.corrected, null, success_style);
+        putText(surface, 1, 15, "message:", normal);
+        putBits(surface, 10, 15, self.recovered, null, success_style);
         drawFooter(surface, "Complete  r reset  q quit");
     }
 };
@@ -380,10 +433,15 @@ fn drawErrorChoices(self: *Model, surface: vxfw.Surface, start_col: u16, row: u1
 }
 
 fn drawFooter(surface: vxfw.Surface, text: []const u8) void {
-    if (surface.size.height == 0) return;
-    putText(surface, 1, surface.size.height - 1, text, muted_style);
+    if (surface.size.height < 2) return;
+    putText(surface, 1, surface.size.height - 2, text, muted_style);
 }
 
 fn centeredColumn(width: u16, text_width: u16) u16 {
     return if (width > text_width) (width - text_width) / 2 else 0;
+}
+
+fn elapsedNanoseconds(start: std.Io.Timestamp, io: std.Io) u64 {
+    const elapsed = start.untilNow(io, .awake).toNanoseconds();
+    return @intCast(@max(elapsed, 0));
 }

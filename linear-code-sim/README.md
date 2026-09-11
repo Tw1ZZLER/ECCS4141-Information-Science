@@ -29,6 +29,14 @@ The installed executable is `zig-out/bin/linear-code-sim`.
 - Diagnosis screen: inspect the syndrome and detected position, then press `Enter`, `Space`, or `c` to reveal correction.
 - Any screen: `r` starts over; `q` or `Ctrl-C` exits.
 
+After every completed stage, the bottom-left performance line reports each operation's elapsed time in nanoseconds:
+
+- Encoder stage: message parsing and matrix encoding.
+- Receiver diagnosis stage: channel transmission/error injection, syndrome calculation, and error lookup.
+- Correction stage: bit correction and message recovery.
+
+Measurements use Zig's monotonic `std.Io.Clock.awake` clock. They are single-operation timings and therefore include timer-call overhead; use `zig build run -Doptimize=ReleaseFast` when demonstrating optimized performance.
+
 The UI switches to a compact layout in a small terminal. A terminal of at least 78 columns by 23 rows shows the generator matrix and complete pipeline most clearly.
 
 ## Matrix and bit convention
