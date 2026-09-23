@@ -4,29 +4,31 @@ An interactive Zig/Vaxis terminal program for the GF(256) in-class activity. It 
 
 ## Run
 
-The project requires Zig 0.16.0 and pins Vaxis 0.6.0. This repository uses a temporary Nix shell so Zig does not need to be installed globally.
+The project requires Zig 0.16.0 and pins Vaxis 0.6.0.
 
 ```sh
-nix shell nixpkgs#zig --command zig build run
+zig --command zig build run
 ```
 
 Other verification commands:
 
 ```sh
-nix shell nixpkgs#zig --command zig build
-nix shell nixpkgs#zig --command zig build test
-nix shell nixpkgs#zig --command sh -c 'zig fmt --check build.zig src/*.zig'
+zig --command zig build
+zig --command zig build test
+zig --command sh -c 'zig fmt --check build.zig src/*.zig'
 ```
 
 The installed executable is `zig-out/bin/gf256-sim`.
 
 ## Controls
 
-- `[` / `]`: previous or next section from any screen.
-- `1`–`5`: jump to a section from the overview or table.
+- `p` / `n` or `[` / `]`: previous or next section from any screen.
+- `Esc`: return to the overview from any screen.
+- `F1`–`F5`: jump directly to Overview, Table, Add, Multiply, or Divide.
+- `1`–`5`: jump to a section from the overview or table; on a calculator these remain available as hexadecimal input.
 - Table: `Up`/`Down` or `j`/`k` scroll one element; `PgUp`/`PgDn` scroll 16; `Home`/`End` jump to either end.
-- Calculators: enter two hexadecimal digits for each byte. `Tab` or `Left`/`Right` selects A or B, `Backspace` edits, and `Enter` or `=` calculates.
-- `x`: clear the current calculator's history.
+- Calculators: enter two hexadecimal digits for each byte. An optional `0x` prefix is accepted. `Tab` or `Left`/`Right` selects A or B, `Backspace` edits, and `Enter` or `=` calculates.
+- `r`: clear the current calculator's history.
 - `q` or `Ctrl-C`: quit.
 
 Typing a hex digit over a complete two-digit operand starts a replacement byte. The calculators retain the eight most recent successful calculations for each operation. Division by zero is rejected.

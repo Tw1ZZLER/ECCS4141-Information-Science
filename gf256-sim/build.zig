@@ -37,6 +37,19 @@ pub fn build(b: *std.Build) void {
     });
     const tests = b.addTest(.{ .root_module = test_module });
     const run_tests = b.addRunArtifact(tests);
+
+    const app_test_module = b.createModule(.{
+        .root_source_file = b.path("src/app.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "vaxis", .module = vaxis.module("vaxis") },
+        },
+    });
+    const app_tests = b.addTest(.{ .root_module = app_test_module });
+    const run_app_tests = b.addRunArtifact(app_tests);
+
     const test_step = b.step("test", "Run GF(256) arithmetic tests");
     test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_app_tests.step);
 }

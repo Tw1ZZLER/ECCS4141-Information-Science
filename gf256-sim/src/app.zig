@@ -148,9 +148,21 @@ pub const Model = struct {
             return;
         }
 
-        if (key.matches('[', .{})) {
+        if (key.matches(0x1b, .{})) {
+            self.setView(.overview);
+        } else if (key.matches(vaxis.Key.f1, .{})) {
+            self.setView(.overview);
+        } else if (key.matches(vaxis.Key.f2, .{})) {
+            self.setView(.table);
+        } else if (key.matches(vaxis.Key.f3, .{})) {
+            self.setView(.addition);
+        } else if (key.matches(vaxis.Key.f4, .{})) {
+            self.setView(.multiplication);
+        } else if (key.matches(vaxis.Key.f5, .{})) {
+            self.setView(.division);
+        } else if (key.matches('[', .{}) or key.matches('p', .{})) {
             self.cycleView(-1);
-        } else if (key.matches(']', .{})) {
+        } else if (key.matches(']', .{}) or key.matches('n', .{})) {
             self.cycleView(1);
         } else if (self.operation() == null and key.matches('1', .{})) {
             self.setView(.overview);
@@ -201,13 +213,28 @@ pub const Model = struct {
             self.calculate();
         } else if (key.matches(vaxis.Key.backspace, .{}) or key.matches(vaxis.Key.delete, .{})) {
             self.deleteDigit();
-        } else if (key.matches('x', .{})) {
+        } else if (key.matches('r', .{})) {
             self.clearCurrentHistory();
+        } else if (key.matches('x', .{}) or key.matches('X', .{})) {
+            self.consumeHexPrefix();
         } else if (hexKey(key)) |digit| {
             self.editOperand(digit);
         } else if (key.codepoint >= 0x20 and key.codepoint <= 0x7e) {
             self.input_error = true;
         }
+    }
+
+    fn consumeHexPrefix(self: *Model) void {
+        const operation_value = self.operation() orelse return;
+        const op_index = @intFromEnum(operation_value);
+        const length = self.input_lengths[op_index][self.active_operand];
+        if (length == 1 and self.inputs[op_index][self.active_operand][0] == '0') {
+            self.inputs[op_index][self.active_operand] = .{ ' ', ' ' };
+            self.input_lengths[op_index][self.active_operand] = 0;
+            self.input_error = false;
+            return;
+        }
+        self.input_error = true;
     }
 
     fn typeErasedEventHandler(ptr: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
@@ -254,7 +281,7 @@ pub const Model = struct {
             .multiplication => self.drawCalculator(surface, ctx, .multiplication),
             .division => self.drawCalculator(surface, ctx, .division),
         }
-        drawFooter(surface, "[/] section  1-5 quick section  Tab/Arrows navigate  q quit");
+        drawFooter(surface, "p/n or [/] section  Esc overview  F1-F5 jump  q quit");
     }
 
     fn drawOverview(self: *const Model, surface: vxfw.Surface) void {
@@ -382,7 +409,7 @@ pub const Model = struct {
                 ) catch return;
                 putText(surface, 4, row, line, if (history_index + 1 == history_length) success_style else normal);
             }
-            putText(surface, 43, 14, "x clears this history", muted_style);
+            putText(surface, 43, 14, "r clears this history", muted_style);
         }
     }
 };
@@ -486,4 +513,49 @@ fn drawFooter(surface: vxfw.Surface, text: []const u8) void {
 
 fn centeredColumn(width: u16, text_width: u16) u16 {
     return if (width > text_width) (width - text_width) / 2 else 0;
+}
+
+test "calculator accepts replacement bytes with optional 0x prefix" {
+    var model: Model = .{};
+    model.setView(.addition);
+
+    model.editOperand('0');
+    model.consumeHexPrefix();
+    model.editOperand('5');
+    model.editOperand('7');
+    try std.testing.expectEqualStrings("57", &model.inputs[0][0]);
+
+    model.active_operand = 1;
+    model.editOperand('8');
+    model.editOperand('3');
+    model.calculate();
+
+    try std.testing.expectEqual(@as(u4, 1), model.history_lengths[0]);
+    try std.testing.expectEqual(@as(u8, 0xd4), model.histories[0][0].result);
+    try std.testing.expect(!model.input_error);
+}
+
+test "calculator rejects division by zero without recording history" {
+    var model: Model = .{};
+    model.setView(.division);
+    model.inputs[2][1] = .{ '0', '0' };
+    model.input_lengths[2][1] = 2;
+    model.calculate();
+
+    try std.testing.expect(model.division_by_zero);
+    try std.testing.expectEqual(@as(u4, 0), model.history_lengths[2]);
+}
+
+test "calculator pages always cycle back to non-input pages" {
+    var model: Model = .{};
+    model.setView(.addition);
+    model.cycleView(1);
+    try std.testing.expectEqual(View.multiplication, model.view);
+    model.cycleView(1);
+    try std.testing.expectEqual(View.division, model.view);
+    model.cycleView(1);
+    try std.testing.expectEqual(View.overview, model.view);
+    model.setView(.addition);
+    model.cycleView(-1);
+    try std.testing.expectEqual(View.table, model.view);
 }
