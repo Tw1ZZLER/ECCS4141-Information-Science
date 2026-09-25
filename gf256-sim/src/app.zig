@@ -28,6 +28,7 @@ const normal: vaxis.Style = .{};
 const title_style: vaxis.Style = .{ .fg = .{ .index = 6 }, .bold = true };
 const section_style: vaxis.Style = .{ .fg = .{ .index = 4 }, .bold = true };
 const active_style: vaxis.Style = .{ .fg = .{ .index = 0 }, .bg = .{ .index = 6 }, .bold = true };
+const active_input_style: vaxis.Style = .{ .fg = .{ .index = 6 }, .bold = true };
 const success_style: vaxis.Style = .{ .fg = .{ .index = 2 }, .bold = true };
 const warning_style: vaxis.Style = .{ .fg = .{ .index = 3 }, .bold = true };
 const error_style: vaxis.Style = .{ .fg = .{ .index = 1 }, .bold = true };
@@ -254,10 +255,11 @@ pub const Model = struct {
 
         if (self.operation()) |operation_value| {
             const op_index = @intFromEnum(operation_value);
-            const digit_col: u16 = if (self.active_operand == 0) 7 else 21;
+            const digit_col: u16 = if (self.active_operand == 0) 9 else 25;
             const length: u16 = self.input_lengths[op_index][self.active_operand];
-            if (size.height > 7 and digit_col + length < size.width) {
-                surface.cursor = .{ .row = 6, .col = digit_col + length, .shape = .beam };
+            const cursor_offset: u16 = if (length < 2) length else 0;
+            if (size.height > 7 and digit_col + cursor_offset < size.width) {
+                surface.cursor = .{ .row = 6, .col = digit_col + cursor_offset, .shape = .beam };
             }
         }
         return surface;
@@ -355,19 +357,21 @@ pub const Model = struct {
         };
 
         putText(surface, 2, 4, heading, section_style);
-        putText(surface, 2, 6, "A: 0x", normal);
-        drawInput(surface, 7, 6, self.inputs[op_index][0], self.input_lengths[op_index][0], self.active_operand == 0);
-        putText(surface, 11, 6, symbol, warning_style);
-        putText(surface, 16, 6, "B: 0x", normal);
-        drawInput(surface, 21, 6, self.inputs[op_index][1], self.input_lengths[op_index][1], self.active_operand == 1);
-        putText(surface, 26, 6, "Enter calculates; Tab selects operand", muted_style);
+        putText(surface, 2, 6, if (self.active_operand == 0) ">" else " ", warning_style);
+        putText(surface, 4, 6, "A", if (self.active_operand == 0) section_style else normal);
+        drawInput(surface, 6, 6, self.inputs[op_index][0], self.input_lengths[op_index][0], self.active_operand == 0);
+        putText(surface, 14, 6, symbol, warning_style);
+        putText(surface, 18, 6, if (self.active_operand == 1) ">" else " ", warning_style);
+        putText(surface, 20, 6, "B", if (self.active_operand == 1) section_style else normal);
+        drawInput(surface, 22, 6, self.inputs[op_index][1], self.input_lengths[op_index][1], self.active_operand == 1);
+        putText(surface, 31, 6, "Tab/Arrows select; Enter calculates", muted_style);
 
         if (self.input_error) {
             putText(surface, 2, 8, "Enter exactly two hexadecimal digits (00-FF) per operand.", error_style);
         } else if (self.division_by_zero) {
             putText(surface, 2, 8, "Division rejected: 0 has no multiplicative inverse.", error_style);
         } else {
-            putText(surface, 2, 8, "Typing replaces a complete byte; Backspace edits.", muted_style);
+            putText(surface, 2, 8, "The > marker is active. Typing replaces its byte; Backspace edits.", muted_style);
         }
 
         const history_length: usize = self.history_lengths[op_index];
@@ -429,12 +433,38 @@ fn drawNavigation(self: *const Model, surface: vxfw.Surface) void {
 }
 
 fn drawInput(surface: vxfw.Surface, col: u16, row: u16, input: [2]u8, length: u2, active: bool) void {
+    putText(surface, col, row, "[0x", muted_style);
     for (0..2) |index| {
-        surface.writeCell(col + @as(u16, @intCast(index)), row, .{
-            .char = .{ .grapheme = if (index < length) input[index .. index + 1] else "_" },
-            .style = if (active) active_style else normal,
+        surface.writeCell(col + 3 + @as(u16, @intCast(index)), row, .{
+            .char = .{ .grapheme = if (index < length) hexGrapheme(input[index]) else "_" },
+            .style = if (active) active_input_style else normal,
         });
     }
+    putText(surface, col + 5, row, "]", muted_style);
+}
+
+/// Surface cells retain grapheme slices after this helper returns, so return
+/// static strings instead of slicing the by-value input array.
+fn hexGrapheme(digit: u8) []const u8 {
+    return switch (digit) {
+        '0' => "0",
+        '1' => "1",
+        '2' => "2",
+        '3' => "3",
+        '4' => "4",
+        '5' => "5",
+        '6' => "6",
+        '7' => "7",
+        '8' => "8",
+        '9' => "9",
+        'a', 'A' => "a",
+        'b', 'B' => "b",
+        'c', 'C' => "c",
+        'd', 'D' => "d",
+        'e', 'E' => "e",
+        'f', 'F' => "f",
+        else => "_",
+    };
 }
 
 fn drawCheck(
@@ -537,6 +567,13 @@ test "calculator accepts replacement bytes with optional 0x prefix" {
     try std.testing.expectEqual(@as(u4, 1), model.history_lengths[0]);
     try std.testing.expectEqual(@as(u8, 0xd4), model.histories[0][0].result);
     try std.testing.expect(!model.input_error);
+}
+
+test "input digits use stable visible graphemes" {
+    try std.testing.expectEqualStrings("0", hexGrapheme('0'));
+    try std.testing.expectEqualStrings("9", hexGrapheme('9'));
+    try std.testing.expectEqualStrings("a", hexGrapheme('A'));
+    try std.testing.expectEqualStrings("f", hexGrapheme('f'));
 }
 
 test "calculator rejects division by zero without recording history" {
