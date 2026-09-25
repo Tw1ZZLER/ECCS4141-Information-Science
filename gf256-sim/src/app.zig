@@ -290,8 +290,8 @@ pub const Model = struct {
         putText(surface, 2, 6, "GF(256) = GF(2^8)", success_style);
         putText(surface, 2, 7, "p(x) = x^8 + x^4 + x^3 + x^2 + 1", normal);
         putText(surface, 2, 8, "Polynomial: 0x11D   reduction byte: 0x1D", muted_style);
-        putText(surface, 2, 10, "An 8-bit value a7...a0 represents:", section_style);
-        putText(surface, 2, 11, "a7*x^7 + a6*x^6 + ... + a1*x + a0", normal);
+        putText(surface, 2, 10, "The table uses LFSR coefficient order [a0 ... a7]:", section_style);
+        putText(surface, 2, 11, "a0 + a1*x + ... + a7*x^7 (constant coefficient first)", normal);
         if (surface.size.height > 18) {
             putText(surface, 2, 13, "Addition", warning_style);
             putText(surface, 16, 13, "coefficient XOR (no carries)", normal);
@@ -305,7 +305,7 @@ pub const Model = struct {
 
     fn drawTable(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
         putText(surface, 2, 4, "COMPLETE FIELD-TO-BINARY TABLE", section_style);
-        putText(surface, 2, 5, "DEC   HEX    BINARY       POLYNOMIAL COEFFICIENT BYTE", muted_style);
+        putText(surface, 2, 5, "ENTRY   ELEMENT       LFSR BITS   COEFFICIENT ORDER", muted_style);
 
         const first_row: u16 = 6;
         const last_row = surface.size.height - 2;
@@ -314,14 +314,18 @@ pub const Model = struct {
         while (row_index < available) : (row_index += 1) {
             const raw = @as(usize, self.table_offset) + row_index;
             if (raw > 255) break;
-            const value: u8 = @intCast(raw);
-            const bits = gf.binary(value);
+            const entry: u8 = @intCast(raw);
+            const bits = gf.tableBinary(entry);
+            const element = if (entry == 0)
+                "0"
+            else
+                std.fmt.allocPrint(ctx.arena, "alpha^{d}", .{entry - 1}) catch return;
             const line = std.fmt.allocPrint(
                 ctx.arena,
-                "{d: >3}   0x{X:0>2}   {s}     a7..a0 = {s}",
-                .{ value, value, &bits, &bits },
+                "{d: >3}     {s: <11} {s}    [1, x, ..., x^7]",
+                .{ entry, element, &bits },
             ) catch return;
-            putText(surface, 2, @intCast(first_row + row_index), line, if (value == self.table_offset) active_style else normal);
+            putText(surface, 2, @intCast(first_row + row_index), line, if (entry == self.table_offset) active_style else normal);
         }
 
         const status = std.fmt.allocPrint(

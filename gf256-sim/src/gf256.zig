@@ -3,6 +3,9 @@ const std = @import("std");
 /// p(x) = x^8 + x^4 + x^3 + x^2 + 1.
 pub const modulus: u9 = 0x11d;
 pub const reduction_byte: u8 = 0x1d;
+/// Feedback taps in the classroom table's left-to-right [1, x, ..., x^7]
+/// convention. This is the bit reversal of reduction_byte.
+pub const lfsr_feedback: u8 = 0xb8;
 
 pub const DivisionError = error{DivisionByZero};
 pub const InverseError = error{ZeroHasNoInverse};
@@ -60,9 +63,31 @@ pub fn binary(value: u8) [8]u8 {
     return result;
 }
 
+/// Return a field-table row as an LFSR state.
+///
+/// Entry 0 is the additive identity. Entry n (1...255) is alpha^(n-1),
+/// displayed left-to-right as the coefficients of [1, x, ..., x^7].
+pub fn lfsrState(entry: u8) u8 {
+    if (entry == 0) return 0;
+
+    var state: u8 = 0x80;
+    var current_entry: u16 = 1;
+    while (current_entry < @as(u16, entry)) : (current_entry += 1) {
+        const feedback = state & 1 != 0;
+        state >>= 1;
+        if (feedback) state ^= lfsr_feedback;
+    }
+    return state;
+}
+
+pub fn tableBinary(entry: u8) [8]u8 {
+    return binary(lfsrState(entry));
+}
+
 test "assigned polynomial constants" {
     try std.testing.expectEqual(@as(u9, 0x11d), modulus);
     try std.testing.expectEqual(@as(u8, 0x1d), reduction_byte);
+    try std.testing.expectEqual(@as(u8, 0xb8), lfsr_feedback);
 }
 
 test "addition is XOR" {
@@ -122,4 +147,24 @@ test "binary formatting is fixed width" {
     try std.testing.expectEqualStrings("00000000", &binary(0));
     try std.testing.expectEqualStrings("01010011", &binary(0x53));
     try std.testing.expectEqualStrings("11111111", &binary(0xff));
+}
+
+test "field table follows the LFSR coefficient convention" {
+    try std.testing.expectEqualStrings("00000000", &tableBinary(0));
+    try std.testing.expectEqualStrings("10000000", &tableBinary(1));
+    try std.testing.expectEqualStrings("01000000", &tableBinary(2));
+    try std.testing.expectEqualStrings("00000001", &tableBinary(8));
+    try std.testing.expectEqualStrings("10111000", &tableBinary(9));
+}
+
+test "LFSR table contains every nonzero state exactly once" {
+    var seen: [256]bool = @splat(false);
+    seen[0] = true;
+    for (1..256) |raw| {
+        const state = lfsrState(@intCast(raw));
+        try std.testing.expect(state != 0);
+        try std.testing.expect(!seen[state]);
+        seen[state] = true;
+    }
+    for (seen) |present| try std.testing.expect(present);
 }

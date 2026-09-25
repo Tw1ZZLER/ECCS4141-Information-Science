@@ -48,7 +48,8 @@ The irreducible polynomial is `0x11D`. When a multiplication shift produces an `
 x^8 = x^4 + x^3 + x^2 + 1  (mod p(x)).
 ```
 
-An 8-bit value `a7a6a5a4a3a2a1a0` represents
+The arithmetic calculators use the usual numeric byte notation, where
+`a7a6a5a4a3a2a1a0` represents
 
 ```text
 a7*x^7 + a6*x^6 + a5*x^5 + a4*x^4
@@ -57,21 +58,32 @@ a7*x^7 + a6*x^6 + a5*x^5 + a4*x^4
 
 For example, `0x53 = 01010011` represents `x^6 + x^4 + x + 1`.
 
+The field table follows the classroom LFSR convention instead: its bits are
+shown left-to-right as `[a0, a1, ..., a7]`, so the constant coefficient comes
+first. Thus `alpha^0 = 1` is displayed as `10000000`.
+
 ## Complete 256-element table
 
-Section 2 of the TUI generates the complete table in numeric order:
+Section 2 generates the 256 field entries by advancing a linear feedback shift
+register built from `p(x)`. Entry 0 is the all-zero state. Entry `n` for
+`1 <= n <= 255` is `alpha^(n-1)`.
 
 ```text
-DEC   HEX    BINARY
-  0   0x00   00000000
-  1   0x01   00000001
-  2   0x02   00000010
- ...   ...      ...
-254   0xFE   11111110
-255   0xFF   11111111
+ENTRY   ELEMENT       LFSR BITS
+  0     0             00000000
+  1     alpha^0       10000000
+  2     alpha^1       01000000
+  8     alpha^7       00000001
+  9     alpha^8       10111000
+ ...       ...           ...
+255     alpha^254     (final nonzero state)
 ```
 
-Scrolling from `Home` through `End` exposes all 256 rows. The table is generated directly from every possible `u8`, so no field element is omitted.
+The register shifts right. When the outgoing rightmost bit is 1, it XORs the
+feedback mask `10111000`, which places the polynomial's `1`, `x^2`, `x^3`, and
+`x^4` coefficients in the table's constant-first order. The primitive
+polynomial makes the register visit every nonzero 8-bit state exactly once
+before repeating. Scrolling from `Home` through `End` exposes all 256 entries.
 
 ## Addition examples
 
