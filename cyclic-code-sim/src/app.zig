@@ -16,8 +16,8 @@ const Stage = enum {
 };
 
 const play_ms: u32 = 400;
-const full_min_width: u16 = 100;
-const full_min_height: u16 = 32;
+const full_min_width: u16 = 110;
+const full_min_height: u16 = 28;
 
 pub const Model = struct {
     stage: Stage = .message,
@@ -362,10 +362,10 @@ pub const Model = struct {
 
         switch (self.stage) {
             .message => self.drawMessage(surface),
-            .encode => self.drawEncode(surface),
+            .encode => self.drawEncode(surface, ctx),
             .channel => self.drawChannel(surface, ctx),
-            .syndrome => self.drawSyndrome(surface),
-            .meggitt => self.drawMeggitt(surface),
+            .syndrome => self.drawSyndrome(surface, ctx),
+            .meggitt => self.drawMeggitt(surface, ctx),
             .result => self.drawResult(surface, ctx),
             .auto_test => self.drawAutoTest(surface, ctx),
         }
@@ -391,22 +391,28 @@ pub const Model = struct {
         ui.drawFooter(surface, "0/1 type  Backspace delete  Enter encode  r reset  q quit");
     }
 
-    fn drawEncode(self: *const Model, surface: vxfw.Surface) void {
+    fn drawEncode(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
         ui.putText(surface, 2, 4, "[2] ENCODER  premultiplied LFSR, gate ON for 11 clocks then parity shifts out", ui.section_style);
+
+        const content_top: u16 = 5;
+        const content_bottom = if (surface.size.height > 3) surface.size.height - 3 else content_top;
+        const content_height = if (content_bottom > content_top) content_bottom - content_top else 0;
+        const circuit_h = ui.circuit_block_rows;
+        const circuit_row: u16 = content_top + if (content_height > circuit_h) (content_height - circuit_h) / 2 else 0;
+
         const snap = if (self.clock_index == 0) null else self.encode_snaps[self.clock_index - 1];
-        ui.drawEncoderCircuit(surface, 2, 5, snap, self.clock_index, self.message);
+        ui.drawEncoderCircuit(surface, ctx.arena, 2, circuit_row, snap, self.clock_index, self.message);
 
-        ui.putText(surface, 2, 14, "m =", ui.normal);
-        ui.putBits(surface, 6, 14, self.message, null, ui.normal);
-        ui.putText(surface, 2, 15, "c =", ui.normal);
-        const partial = self.partialCodeword();
-        ui.putBits(surface, 6, 15, partial, null, ui.success_style);
-        ui.putText(surface, 68, 14, "c = (p0 p1 p2 p3 | m0..m10)", ui.muted_style);
+        const status_row = circuit_row + ui.circuit_art_rows;
+        ui.putText(surface, 2, status_row, "m =", ui.normal);
+        ui.putBits(surface, 6, status_row, self.message, null, ui.normal);
+        ui.putText(surface, 2, status_row + 1, "c =", ui.normal);
+        ui.putBits(surface, 6, status_row + 1, self.partialCodeword(), null, ui.success_style);
 
-        const log_row: u16 = 17;
-        const max_rows = if (surface.size.height > log_row + 3) surface.size.height - log_row - 3 else 0;
-        ui.drawEncoderLog(surface, 2, log_row, &self.encode_snaps, self.clock_index, max_rows);
-        self.drawClockFooter(surface);
+        const log_col: u16 = @min(surface.size.width -| 34, @as(u16, 78));
+        const log_rows = if (content_bottom > circuit_row + 1) content_bottom - circuit_row - 1 else 0;
+        ui.drawEncoderLog(surface, ctx.arena, log_col, circuit_row, &self.encode_snaps, self.clock_index, log_rows);
+        self.drawClockFooter(surface, ctx);
     }
 
     fn drawChannel(self: *Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
@@ -420,7 +426,7 @@ pub const Model = struct {
         const preview_index: ?usize = if (self.error_choice == 0) null else self.error_choice - 1;
         const preview = code.transmit(self.codeword, preview_index) catch self.codeword;
         ui.putText(surface, 2, 12, "Received    r =", ui.normal);
-        ui.putBits(surface, 18, 12, preview, preview_index, if (preview_index == null) ui.success_style else ui.changed_style);
+        ui.putBits(surface, 18, 12, preview, preview_index, ui.success_style);
 
         const desc = if (preview_index) |index|
             std.fmt.allocPrint(ctx.arena, "Single-bit error at c{d} (coefficient of x^{d}).", .{ index, index }) catch return
@@ -431,47 +437,66 @@ pub const Model = struct {
         ui.drawFooter(surface, "Left/Right or h/l select  0=none  click a bit  Enter/Space transmit  r reset  q quit");
     }
 
-    fn drawSyndrome(self: *const Model, surface: vxfw.Surface) void {
+    fn drawSyndrome(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
         ui.putText(surface, 2, 4, "[4] SYNDROME REGISTER  r14 first, s(x) = r(x) mod g(x)", ui.section_style);
+
+        const content_top: u16 = 5;
+        const content_bottom = if (surface.size.height > 3) surface.size.height - 3 else content_top;
+        const content_height = if (content_bottom > content_top) content_bottom - content_top else 0;
+        const circuit_h = ui.circuit_block_rows;
+        const circuit_row: u16 = content_top + if (content_height > circuit_h) (content_height - circuit_h) / 2 else 0;
+
         const snap = if (self.clock_index == 0) null else self.syndrome_snaps[self.clock_index - 1];
-        ui.drawSyndromeCircuit(surface, 2, 5, snap, self.clock_index, self.received, false, false);
+        ui.drawSyndromeCircuit(surface, ctx.arena, 2, circuit_row, snap, self.clock_index, self.received, false, false);
 
         if (self.clock_index == code.n) {
+            const badge_row = circuit_row + ui.circuit_art_rows + 2;
             if (code.isZero(self.syndrome)) {
-                ui.putText(surface, 2, 14, "NO ERROR  syndrome = 0000", ui.success_style);
+                ui.putText(surface, 2, badge_row, "NO ERROR  syndrome = 0000", ui.success_style);
             } else {
-                var buf: [4]u8 = undefined;
-                const bits = code.formatBits(self.syndrome, &buf);
-                var line: [40]u8 = undefined;
-                const text = std.fmt.bufPrint(&line, "ERROR DETECTED  syndrome = {s}", .{bits}) catch return;
-                ui.putText(surface, 2, 14, text, ui.error_style);
+                const bits = std.fmt.allocPrint(ctx.arena, "{d}{d}{d}{d}", .{
+                    self.syndrome[0],
+                    self.syndrome[1],
+                    self.syndrome[2],
+                    self.syndrome[3],
+                }) catch return;
+                const text = std.fmt.allocPrint(ctx.arena, "ERROR DETECTED  syndrome = {s}", .{bits}) catch return;
+                ui.putText(surface, 2, badge_row, text, ui.error_style);
             }
         }
 
-        const log_row: u16 = 16;
-        const max_rows = if (surface.size.height > log_row + 3) surface.size.height - log_row - 3 else 0;
-        ui.drawSyndromeLog(surface, 2, log_row, &self.syndrome_snaps, self.clock_index, max_rows);
-        self.drawClockFooter(surface);
+        const log_col: u16 = @min(surface.size.width -| 30, @as(u16, 78));
+        const log_rows = if (content_bottom > circuit_row + 1) content_bottom - circuit_row - 1 else 0;
+        ui.drawSyndromeLog(surface, ctx.arena, log_col, circuit_row, &self.syndrome_snaps, self.clock_index, log_rows);
+        self.drawClockFooter(surface, ctx);
     }
 
-    fn drawMeggitt(self: *const Model, surface: vxfw.Surface) void {
+    fn drawMeggitt(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
         ui.putText(surface, 2, 4, "[5] MEGGITT DECODER  clock S with input 0; fire when S matches x^14 mod g(x)", ui.section_style);
+
+        const content_top: u16 = 5;
+        const content_bottom = if (surface.size.height > 3) surface.size.height - 3 else content_top;
+        const content_height = if (content_bottom > content_top) content_bottom - content_top else 0;
+        const circuit_h = ui.circuit_block_rows;
+        const circuit_row: u16 = content_top + if (content_height > circuit_h) (content_height - circuit_h) / 2 else 0;
+
         const match = if (self.clock_index == 0) false else self.meggitt_snaps[self.clock_index - 1].match;
         const view = self.meggittView();
-        ui.drawSyndromeCircuit(surface, 2, 5, view, self.clock_index, self.received, true, match);
+        ui.drawSyndromeCircuit(surface, ctx.arena, 2, circuit_row, view, self.clock_index, self.received, true, match);
 
-        ui.putText(surface, 2, 14, "received:", ui.normal);
-        ui.putBits(surface, 12, 14, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.changed_style);
+        const bit_row = circuit_row + ui.circuit_art_rows;
+        ui.putText(surface, 2, bit_row, "received:", ui.normal);
+        ui.putBits(surface, 12, bit_row, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.normal);
         if (self.clock_index > 0) {
             const snap = self.meggitt_snaps[self.clock_index - 1];
-            ui.putText(surface, 2, 15, "correct :", ui.normal);
-            ui.putBits(surface, 12, 15, snap.corrected_so_far, if (snap.match) snap.examine_index else null, ui.success_style);
+            ui.putText(surface, 2, bit_row + 1, "correct :", ui.normal);
+            ui.putBits(surface, 12, bit_row + 1, snap.corrected_so_far, if (snap.match) snap.examine_index else null, ui.success_style);
         }
 
-        const log_row: u16 = 17;
-        const max_rows = if (surface.size.height > log_row + 3) surface.size.height - log_row - 3 else 0;
-        ui.drawMeggittLog(surface, 2, log_row, &self.meggitt_snaps, self.clock_index, max_rows);
-        self.drawClockFooter(surface);
+        const log_col: u16 = @min(surface.size.width -| 30, @as(u16, 78));
+        const log_rows = if (content_bottom > circuit_row + 1) content_bottom - circuit_row - 1 else 0;
+        ui.drawMeggittLog(surface, ctx.arena, log_col, circuit_row, &self.meggitt_snaps, self.clock_index, log_rows);
+        self.drawClockFooter(surface, ctx);
     }
 
     fn drawResult(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
@@ -500,9 +525,9 @@ pub const Model = struct {
         ui.putText(surface, 2, 9, meg_text, ui.warning_style);
 
         ui.putText(surface, 2, 11, "Received:  ", ui.normal);
-        ui.putBits(surface, 13, 11, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.changed_style);
+        ui.putBits(surface, 13, 11, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.normal);
         ui.putText(surface, 2, 12, "Corrected: ", ui.normal);
-        ui.putBits(surface, 13, 12, self.corrected, self.detected_meggitt, ui.corrected_style);
+        ui.putBitsStyled(surface, 13, 12, self.corrected, self.detected_meggitt, ui.success_style, ui.corrected_style);
         ui.putText(surface, 2, 14, "Recovered m (c4..c14):", ui.normal);
         ui.putBits(surface, 26, 14, self.recovered, null, ui.success_style);
 
@@ -575,7 +600,7 @@ pub const Model = struct {
                 ui.putText(surface, 1, 6, text, ui.warning_style);
                 ui.putText(surface, 1, 8, "c:", ui.normal);
                 ui.putBits(surface, 4, 8, self.partialCodeword(), null, ui.success_style);
-                self.drawClockFooter(surface);
+                self.drawClockFooter(surface, ctx);
             },
             .channel => {
                 ui.putText(surface, 1, 2, "c:", ui.normal);
@@ -594,7 +619,7 @@ pub const Model = struct {
                 var buf: [32]u8 = undefined;
                 const text = std.fmt.bufPrint(&buf, "clock {d}/15", .{self.clock_index}) catch return;
                 ui.putText(surface, 1, 6, text, ui.warning_style);
-                self.drawClockFooter(surface);
+                self.drawClockFooter(surface, ctx);
             },
             .meggitt => {
                 ui.putText(surface, 1, 2, "Meggitt locator", ui.section_style);
@@ -605,7 +630,7 @@ pub const Model = struct {
                     const text = std.fmt.bufPrint(&buf, "look c{d} match={s}", .{ s.examine_index, if (s.match) "YES" else "no" }) catch return;
                     ui.putText(surface, 1, 6, text, if (s.match) ui.error_style else ui.normal);
                 }
-                self.drawClockFooter(surface);
+                self.drawClockFooter(surface, ctx);
             },
             .result => {
                 ui.putText(surface, 1, 2, "S:", ui.normal);
@@ -636,11 +661,13 @@ pub const Model = struct {
         ui.putBits(surface, col + 5, row, reg, null, ui.warning_style);
     }
 
-    fn drawClockFooter(self: *const Model, surface: vxfw.Surface) void {
+    fn drawClockFooter(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
         const extra = if (self.clock_index == code.n) "  Enter next stage" else "";
-        var buf: [96]u8 = undefined;
-        const text = std.fmt.bufPrint(&buf, "Space/n/Right clock  Left/Backspace back  p play  f finish{s}  r reset  q quit", .{extra}) catch
-            "Space clock  p play  f finish  r reset  q quit";
+        const text = std.fmt.allocPrint(
+            ctx.arena,
+            "Space/n/Right clock  Left/Backspace back  p play  f finish{s}  r reset  q quit",
+            .{extra},
+        ) catch "Space clock  p play  f finish  r reset  q quit";
         ui.drawFooter(surface, text);
     }
 
