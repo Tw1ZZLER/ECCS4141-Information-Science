@@ -17,6 +17,8 @@ pub const muted_style: vaxis.Style = .{ .dim = true };
 pub const wire_one: vaxis.Style = .{ .fg = .{ .index = 3 }, .bold = true };
 pub const xor_style: vaxis.Style = .{ .fg = .{ .index = 5 }, .bold = true };
 pub const ff_style: vaxis.Style = .{ .fg = .{ .index = 6 } };
+/// Soft red border for a flip-flop that changed this clock (no reverse fill).
+pub const ff_changed_style: vaxis.Style = .{ .fg = .{ .index = 9 }, .bold = true };
 
 /// Large flip-flop box width in columns.
 const ff_w: u16 = 13;
@@ -467,21 +469,21 @@ fn drawFlipFlop(
     value: code.Bit,
     changed: bool,
 ) void {
-    const border = if (changed) changed_style else ff_style;
-    // 13 columns: ┏━━━━━━━━━━━┓
+    // Only the trim changes color; reverse-fill on the whole box caused blotches
+    // around the label and was visually aggressive.
+    const border = if (changed) ff_changed_style else ff_style;
     putText(surface, col, row, "┏━━━━━━━━━━━┓", border);
 
-    // Body built only from static graphemes so Cell slices stay valid.
     putText(surface, col, row + 1, "┃", border);
     putText(surface, col + 1, row + 1, "  ", normal);
-    putText(surface, col + 3, row + 1, prefix, if (changed) changed_style else normal);
-    putText(surface, col + 3 + @as(u16, @intCast(prefix.len)), row + 1, asciiDigit(index), if (changed) changed_style else normal);
-    putText(surface, col + 6, row + 1, " [", if (changed) changed_style else normal);
+    putText(surface, col + 3, row + 1, prefix, normal);
+    putText(surface, col + 3 + @as(u16, @intCast(prefix.len)), row + 1, asciiDigit(index), normal);
+    putText(surface, col + 6, row + 1, " [", normal);
     surface.writeCell(col + 8, row + 1, .{
         .char = .{ .grapheme = digit(value), .width = 1 },
-        .style = if (changed) changed_style else if (value == 1) warning_style else normal,
+        .style = if (value == 1) warning_style else normal,
     });
-    putText(surface, col + 9, row + 1, "]  ", if (changed) changed_style else normal);
+    putText(surface, col + 9, row + 1, "]  ", normal);
     putText(surface, col + 12, row + 1, "┃", border);
 
     putText(surface, col, row + 2, "┗━━━━━━━━━━━┛", border);
