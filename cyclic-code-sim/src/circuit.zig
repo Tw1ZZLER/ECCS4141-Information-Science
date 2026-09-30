@@ -102,17 +102,24 @@ pub fn circuitWidth() u16 {
     return encoderCircuitWidth();
 }
 
+/// Shared body: left margin for syndrome input XOR, then 4 FFs + gaps, then encoder input XOR.
+/// Relative widths measured from the circuit's left `col`.
+const body_origin_from_col: u16 = 16;
+const right_xor_width: u16 = 22; // "───┴──>[XOR]<════ m.."
+
 /// Rightmost column used by the encoder diagram relative to its left `col`.
 pub fn encoderCircuitWidth() u16 {
-    // origin = col+8; last FF at origin+64; input label extends to ~origin+101.
-    // Relative to col: 8 + 101 + 1 = 110.
-    return 110;
+    return body_origin_from_col + bodySpan() + right_xor_width;
 }
 
 /// Rightmost column used by the syndrome diagram relative to its left `col`.
 pub fn syndromeCircuitWidth() u16 {
-    // origin = col+16; loop_right = origin+78; relative to col: 16+78+1 = 95.
-    return 96;
+    return body_origin_from_col + bodySpan() + 2;
+}
+
+fn bodySpan() u16 {
+    // 4 FFs + 2 plain gaps + 1 tap gap
+    return 4 * ff_w + 2 * plain_gap + tap_gap;
 }
 
 pub const CircuitLogLayout = struct {
@@ -179,41 +186,29 @@ pub fn drawEncoderCircuit(
     const before: code.Register = if (snap) |s| s.before else @splat(0);
     const after: code.Register = if (snap) |s| s.after else @splat(0);
     const gate = if (snap) |s| s.gate else clock_index < code.k;
-    const origin = col + 8;
-    const xs = ffPositions(origin);
-    const last = xs[code.parity_len - 1];
-    const loop_left = origin - 2;
-    const loop_right = last + ff_w + 12;
+    const geom = sharedGeom(col, row);
 
-    // Top feedback rail.
-    putText(surface, loop_left, row, "┌", bitStyle(fb));
-    drawHLine(surface, loop_left + 1, loop_right - 1, row, "─", bitStyle(fb));
-    putText(surface, loop_right, row, "┐", bitStyle(fb));
-    putText(surface, origin + 14, row, if (fb == 1) " fb = 1 " else " fb = 0 ", if (fb == 1) warning_style else muted_style);
+    // Encoder: message XOR is on the RIGHT. fb = m XOR r3 enters r0 on the LEFT.
+    // Rail spans the shared body and extends to the right-hand input XOR join.
+    const loop_right = geom.last_ff + ff_w + 10;
+    drawFeedbackRail(surface, geom.loop_left, loop_right, geom.rail_row, fb);
+    putText(surface, geom.loop_left - 3, geom.rail_row + 2, "g0", muted_style);
+    putText(surface, geom.loop_left, geom.rail_row + 2, "v", bitStyle(fb));
+    putText(surface, geom.origin - 6, geom.body_row + 1, "*════>", bitStyle(fb));
 
-    putText(surface, loop_left, row + 1, "│", bitStyle(fb));
-    putText(surface, loop_right, row + 1, "│", bitStyle(fb));
-    putText(surface, loop_left, row + 2, "v", bitStyle(fb));
-    putText(surface, loop_left - 3, row + 2, "g0", muted_style);
+    drawLfsrBody(surface, geom.xs, geom.body_row, after, before, fb, "r");
 
-    // Feedback inject into r0.
-    putText(surface, origin - 6, row + 4, "*════>", bitStyle(fb));
+    const in_xor_col = geom.last_ff + ff_w + 3;
+    putText(surface, geom.last_ff + ff_w, geom.body_row + 1, "───┴──>", bitStyle(fb));
+    drawXorBox(surface, in_xor_col + 4, geom.body_row, fb);
+    putText(surface, in_xor_col + 4 + 5, geom.body_row + 1, "<════", bitStyle(in_bit));
+    drawInputLabel(surface, arena, in_xor_col + 4 + 10, geom.body_row + 1, snap);
+    putText(surface, loop_right, geom.rail_row + 1, "│", bitStyle(fb));
+    putText(surface, loop_right, geom.rail_row + 2, "│", bitStyle(fb));
+    putText(surface, loop_right, geom.body_row + 1, "┘", bitStyle(fb));
 
-    // Register chain.
-    drawLfsrBody(surface, xs, row + 3, after, before, fb, "r");
-
-    // Right-side input XOR / gate.
-    const in_xor_col = last + ff_w + 3;
-    putText(surface, last + ff_w, row + 4, "───┴──>", bitStyle(fb));
-    drawXorBox(surface, in_xor_col + 4, row + 3, fb);
-    putText(surface, in_xor_col + 4 + 5, row + 4, "<════", bitStyle(in_bit));
-    drawInputLabel(surface, arena, in_xor_col + 4 + 10, row + 4, snap);
-    putText(surface, loop_right, row + 2, "│", bitStyle(fb));
-    putText(surface, loop_right, row + 3, "│", bitStyle(fb));
-    putText(surface, loop_right, row + 4, "┘", bitStyle(fb));
-
-    drawClkLabels(surface, xs, row + 6);
-    drawEncoderStatus(surface, arena, col, row + 8, snap, clock_index, message, gate, fb, in_bit);
+    drawClkLabels(surface, geom.xs, geom.body_row + 3);
+    drawEncoderStatus(surface, arena, col, geom.body_row + 5, snap, clock_index, message, gate, fb, in_bit);
 }
 
 pub fn drawSyndromeCircuit(
@@ -231,31 +226,27 @@ pub fn drawSyndromeCircuit(
     const in_bit: code.Bit = if (snap) |s| s.in_bit else 0;
     const before: code.Register = if (snap) |s| s.before else @splat(0);
     const after: code.Register = if (snap) |s| s.after else @splat(0);
-    const origin = col + 16;
-    const xs = ffPositions(origin);
-    const last = xs[code.parity_len - 1];
-    const loop_left = origin - 2;
-    const loop_right = last + ff_w + 1;
+    const geom = sharedGeom(col, row);
 
-    putText(surface, loop_left, row, "┌", bitStyle(fb));
-    drawHLine(surface, loop_left + 1, loop_right - 1, row, "─", bitStyle(fb));
-    putText(surface, loop_right, row, "┐", bitStyle(fb));
-    putText(surface, origin + 14, row, if (fb == 1) " fb = 1 " else " fb = 0 ", if (fb == 1) warning_style else muted_style);
-
-    putText(surface, loop_left, row + 1, "│", bitStyle(fb));
-    putText(surface, loop_right, row + 1, "│", bitStyle(fb));
-    putText(surface, loop_left, row + 2, "v", bitStyle(fb));
-    putText(surface, loop_right, row + 2, "│", bitStyle(fb));
-    putText(surface, loop_right, row + 3, "│", bitStyle(fb));
-    putText(surface, loop_right, row + 4, "┘", bitStyle(fb));
+    // Syndrome: received-bit XOR is on the LEFT. fb = s3, s0' = r XOR fb.
+    // Flip-flops sit in the same columns as the encoder; only the input XOR differs.
+    const left_xor_col = geom.origin - 8;
+    const loop_left = left_xor_col + 2;
+    const loop_right = geom.last_ff + ff_w + 1;
+    drawFeedbackRail(surface, loop_left, loop_right, geom.rail_row, fb);
+    putText(surface, loop_left, geom.rail_row + 1, "│", bitStyle(fb));
+    putText(surface, loop_left, geom.rail_row + 2, "v", bitStyle(fb));
+    putText(surface, loop_right, geom.rail_row + 1, "│", bitStyle(fb));
+    putText(surface, loop_right, geom.rail_row + 2, "│", bitStyle(fb));
+    putText(surface, loop_right, geom.body_row + 1, "┘", bitStyle(fb));
 
     const in_d0: code.Bit = if (snap) |s| s.d[0] else 0;
-    putText(surface, col, row + 4, "r ════>", bitStyle(in_bit));
-    drawXorBox(surface, col + 8, row + 3, in_d0);
-    putText(surface, col + 13, row + 4, "════>", bitStyle(in_d0));
+    putText(surface, col, geom.body_row + 1, "r ════>", bitStyle(in_bit));
+    drawXorBox(surface, left_xor_col, geom.body_row, in_d0);
+    putText(surface, left_xor_col + xor_w, geom.body_row + 1, "════>", bitStyle(in_d0));
 
-    drawLfsrBody(surface, xs, row + 3, after, before, fb, "s");
-    drawClkLabels(surface, xs, row + 6);
+    drawLfsrBody(surface, geom.xs, geom.body_row, after, before, fb, "s");
+    drawClkLabels(surface, geom.xs, geom.body_row + 3);
 
     if (snap) |s| {
         const text = std.fmt.allocPrint(arena, "clock {d}/{d}   in c{d}={d}   fb={d}   S={s}", .{
@@ -266,23 +257,57 @@ pub fn drawSyndromeCircuit(
             s.fb,
             tryFormatBits(arena, after),
         }) catch return;
-        putText(surface, col, row + 8, text, normal);
+        putText(surface, col, geom.body_row + 5, text, normal);
     } else {
-        putText(surface, col, row + 8, "clock 0/15   registers cleared   waiting for first bit", muted_style);
+        putText(surface, col, geom.body_row + 5, "clock 0/15   registers cleared   waiting for first bit", muted_style);
     }
 
-    drawReceivedStrip(surface, col, row + 9, received, if (snap) |s| s.in_index else null, clock_index == 0);
+    drawReceivedStrip(surface, col, geom.body_row + 6, received, if (snap) |s| s.in_index else null, clock_index == 0);
 
     if (meggitt) {
         const pat = tryFormatBits(arena, code.MEGGITT_PATTERN);
         const box_style = if (match) error_style else muted_style;
-        const box_col = col + @min(surface.size.width -| 24, @as(u16, 68));
-        putText(surface, box_col, row + 2, "┌────────────────────┐", box_style);
-        putText(surface, box_col, row + 3, if (match) "│ MATCH x^14 CORRECT │" else "│ s == pattern ?     │", if (match) changed_style else muted_style);
-        const pat_line = std.fmt.allocPrint(arena, "│ pattern {s}        │", .{pat}) catch return;
-        putText(surface, box_col, row + 4, pat_line, box_style);
-        putText(surface, box_col, row + 5, "└────────────────────┘", box_style);
+        // Park the comparator to the right of the shared body, not over the FFs.
+        const box_col = col + body_origin_from_col + bodySpan() + 3;
+        if (box_col + 22 < surface.size.width) {
+            putText(surface, box_col, geom.body_row - 1, "┌────────────────────┐", box_style);
+            putText(surface, box_col, geom.body_row, if (match) "│ MATCH x^14 CORRECT │" else "│ s == pattern ?     │", if (match) changed_style else muted_style);
+            const pat_line = std.fmt.allocPrint(arena, "│ pattern {s}        │", .{pat}) catch return;
+            putText(surface, box_col, geom.body_row + 1, pat_line, box_style);
+            putText(surface, box_col, geom.body_row + 2, "└────────────────────┘", box_style);
+        }
     }
+}
+
+const SharedGeom = struct {
+    origin: u16,
+    xs: [code.parity_len]u16,
+    last_ff: u16,
+    loop_left: u16,
+    rail_row: u16,
+    body_row: u16,
+};
+
+fn sharedGeom(col: u16, row: u16) SharedGeom {
+    const origin = col + body_origin_from_col;
+    const xs = ffPositions(origin);
+    return .{
+        .origin = origin,
+        .xs = xs,
+        .last_ff = xs[code.parity_len - 1],
+        .loop_left = origin - 2,
+        .rail_row = row,
+        .body_row = row + 3,
+    };
+}
+
+fn drawFeedbackRail(surface: vxfw.Surface, left: u16, right: u16, row: u16, fb: code.Bit) void {
+    putText(surface, left, row, "┌", bitStyle(fb));
+    drawHLine(surface, left + 1, right - 1, row, "─", bitStyle(fb));
+    putText(surface, right, row, "┐", bitStyle(fb));
+    putText(surface, left + 14, row, if (fb == 1) " fb = 1 " else " fb = 0 ", if (fb == 1) warning_style else muted_style);
+    putText(surface, left, row + 1, "│", bitStyle(fb));
+    putText(surface, right, row + 1, "│", bitStyle(fb));
 }
 
 pub fn drawEncoderLog(
@@ -445,7 +470,7 @@ fn drawLfsrBody(
                 putText(surface, from, row + 1, "════>", bitStyle(after[i]));
                 drawXorBox(surface, from + 5, row, after[i] ^ fb);
                 // Tap label and drop from feedback rail.
-                putText(surface, from + 5, row - 1, "g3", warning_style);
+                putText(surface, from + 4, row - 1, "g3", muted_style);
                 putText(surface, from + 7, row - 2, "│", bitStyle(fb));
                 putText(surface, from + 7, row - 1, "v", bitStyle(fb));
                 putText(surface, from + 5 + xor_w, row + 1, "════>", bitStyle(after[i] ^ fb));
