@@ -11,7 +11,7 @@ pub const Register = [parity_len]Bit;
 pub const Syndrome = Register;
 
 /// g(x) = 1 + x^3 + x^4, stored as [g0, g1, g2, g3, g4].
-pub const G = [parity_len + 1]Bit{ 1, 0, 0, 1, 1 };
+pub const G = [parity_len + 1]Bit{ 1, 1, 0, 0, 1 };
 pub const G_POLY: u16 = polyFromCoeffs(G);
 
 pub const ParseError = error{
