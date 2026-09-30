@@ -105,7 +105,8 @@ pub fn circuitWidth() u16 {
 /// Shared body: left margin for syndrome input XOR, then 4 FFs + gaps, then encoder input XOR.
 /// Relative widths measured from the circuit's left `col`.
 const body_origin_from_col: u16 = 16;
-const right_xor_width: u16 = 22; // "───┴──>[XOR]<════ m.."
+/// Encoder right side: "════>[XOR]<════" plus padding (label sits under the XOR).
+const right_xor_width: u16 = 18;
 
 /// Rightmost column used by the encoder diagram relative to its left `col`.
 pub fn encoderCircuitWidth() u16 {
@@ -188,27 +189,37 @@ pub fn drawEncoderCircuit(
     const gate = if (snap) |s| s.gate else clock_index < code.k;
     const geom = sharedGeom(col, row);
 
-    // Encoder: message XOR is on the RIGHT. fb = m XOR r3 enters r0 on the LEFT.
-    // Rail spans the shared body and extends to the right-hand input XOR join.
-    const loop_right = geom.last_ff + ff_w + 10;
-    drawFeedbackRail(surface, geom.loop_left, loop_right, geom.rail_row, fb);
-    putText(surface, geom.loop_left - 3, geom.rail_row + 2, "g0", muted_style);
-    putText(surface, geom.loop_left, geom.rail_row + 2, "v", bitStyle(fb));
-    putText(surface, geom.origin - 6, geom.body_row + 1, "*════>", bitStyle(fb));
+    // Left inject column (g0 / "*════>") — must match so the drop sits on the input arm.
+    const inject_col = geom.origin - 6;
+    // Right message XOR: r3 from the left, m from the right, fb out the top to the rail.
+    const xor_col = geom.last_ff + ff_w + 5;
+    const xor_mid = xor_col + 2;
+
+    drawFeedbackRail(surface, inject_col, xor_mid, geom.rail_row, fb);
+
+    // g0 drop aligned with the "*" of the r0 input arm.
+    putText(surface, inject_col - 3, geom.rail_row + 2, "g0", muted_style);
+    putText(surface, inject_col, geom.rail_row + 1, "│", bitStyle(fb));
+    putText(surface, inject_col, geom.rail_row + 2, "v", bitStyle(fb));
+    putText(surface, inject_col, geom.body_row + 1, "*════>", bitStyle(fb));
 
     drawLfsrBody(surface, geom.xs, geom.body_row, after, before, fb, "r");
 
-    const in_xor_col = geom.last_ff + ff_w + 3;
-    putText(surface, geom.last_ff + ff_w, geom.body_row + 1, "───┴──>", bitStyle(fb));
-    drawXorBox(surface, in_xor_col + 4, geom.body_row, fb);
-    putText(surface, in_xor_col + 4 + 5, geom.body_row + 1, "<════", bitStyle(in_bit));
-    drawInputLabel(surface, arena, in_xor_col + 4 + 10, geom.body_row + 1, snap);
-    putText(surface, loop_right, geom.rail_row + 1, "│", bitStyle(fb));
-    putText(surface, loop_right, geom.rail_row + 2, "│", bitStyle(fb));
-    putText(surface, loop_right, geom.body_row + 1, "┘", bitStyle(fb));
+    // Clean wire from r3 into the left of the message XOR (no tee / branch).
+    const r3_bit: code.Bit = if (snap) |s| s.before[code.parity_len - 1] else 0;
+    putText(surface, geom.last_ff + ff_w, geom.body_row + 1, "════>", bitStyle(r3_bit));
+
+    // Message XOR: top stem feeds the feedback rail.
+    drawXorBoxTopOut(surface, xor_col, geom.body_row, fb);
+    putText(surface, xor_mid, geom.rail_row + 1, "│", bitStyle(fb));
+    putText(surface, xor_mid, geom.rail_row + 2, "│", bitStyle(fb));
+
+    // m enters from the right; label sits under the gate (below CLK labels).
+    putText(surface, xor_col + xor_w, geom.body_row + 1, "<════", bitStyle(in_bit));
+    drawInputLabel(surface, arena, xor_col, geom.body_row + 4, snap);
 
     drawClkLabels(surface, geom.xs, geom.body_row + 3);
-    drawEncoderStatus(surface, arena, col, geom.body_row + 5, snap, clock_index, message, gate, fb, in_bit);
+    drawEncoderStatus(surface, arena, col, geom.body_row + 6, snap, clock_index, message, gate, fb, in_bit);
 }
 
 pub fn drawSyndromeCircuit(
@@ -517,6 +528,14 @@ fn drawFlipFlop(
 fn drawXorBox(surface: vxfw.Surface, col: u16, row: u16, out: code.Bit) void {
     const used = if (out == 1) warning_style else xor_style;
     putText(surface, col, row, "╭───╮", used);
+    putText(surface, col, row + 1, "│XOR│", used);
+    putText(surface, col, row + 2, "╰───╯", used);
+}
+
+/// XOR with a top stem (┴) so feedback can rise from the gate into the rail above.
+fn drawXorBoxTopOut(surface: vxfw.Surface, col: u16, row: u16, out: code.Bit) void {
+    const used = if (out == 1) warning_style else xor_style;
+    putText(surface, col, row, "╭─┴─╮", used);
     putText(surface, col, row + 1, "│XOR│", used);
     putText(surface, col, row + 2, "╰───╯", used);
 }
