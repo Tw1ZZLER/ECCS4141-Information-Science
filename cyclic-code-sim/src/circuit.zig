@@ -97,16 +97,70 @@ pub fn centeredColumn(width: u16, text_width: u16) u16 {
 }
 
 pub fn circuitWidth() u16 {
-    // left margin + 4 flip-flops + gaps + right XOR/input.
-    return 10 + 4 * ff_w + 2 * plain_gap + tap_gap + 22;
+    return encoderCircuitWidth();
 }
 
+/// Rightmost column used by the encoder diagram relative to its left `col`.
 pub fn encoderCircuitWidth() u16 {
-    return circuitWidth();
+    // origin = col+8; last FF at origin+64; input label extends to ~origin+101.
+    // Relative to col: 8 + 101 + 1 = 110.
+    return 110;
 }
 
+/// Rightmost column used by the syndrome diagram relative to its left `col`.
 pub fn syndromeCircuitWidth() u16 {
-    return circuitWidth() + 4;
+    // origin = col+16; loop_right = origin+78; relative to col: 16+78+1 = 95.
+    return 96;
+}
+
+pub const CircuitLogLayout = struct {
+    circuit_row: u16,
+    log_col: u16,
+    log_row: u16,
+    log_rows: u16,
+    side_by_side: bool,
+};
+
+/// Place the clock log to the right of the circuit when width allows; otherwise below it.
+pub fn layoutCircuitAndLog(
+    surface_width: u16,
+    surface_height: u16,
+    content_top: u16,
+    circuit_left: u16,
+    circuit_w: u16,
+    log_w: u16,
+) CircuitLogLayout {
+    const footer_reserve: u16 = 3;
+    const content_bottom = if (surface_height > footer_reserve) surface_height - footer_reserve else content_top;
+    const content_height = if (content_bottom > content_top) content_bottom - content_top else 0;
+    const gap: u16 = 3;
+    const side_by_side = surface_width >= circuit_left + circuit_w + gap + log_w;
+
+    const circuit_h = if (side_by_side) circuit_block_rows else circuit_block_rows;
+    const circuit_row: u16 = content_top + if (content_height > circuit_h) (content_height - circuit_h) / 2 else 0;
+
+    if (side_by_side) {
+        const log_col = circuit_left + circuit_w + gap;
+        const log_rows = if (content_bottom > circuit_row + 1) content_bottom - circuit_row - 1 else 0;
+        return .{
+            .circuit_row = circuit_row,
+            .log_col = log_col,
+            .log_row = circuit_row,
+            .log_rows = log_rows,
+            .side_by_side = true,
+        };
+    }
+
+    // Stack the log under the circuit so it never paints over the hardware.
+    const log_row = circuit_row + circuit_block_rows + 1;
+    const log_rows = if (content_bottom > log_row + 1) content_bottom - log_row - 1 else 0;
+    return .{
+        .circuit_row = circuit_row,
+        .log_col = circuit_left,
+        .log_row = log_row,
+        .log_rows = log_rows,
+        .side_by_side = false,
+    };
 }
 
 pub fn drawEncoderCircuit(
