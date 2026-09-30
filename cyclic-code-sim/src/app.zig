@@ -10,7 +10,6 @@ const Stage = enum {
     encode,
     channel,
     syndrome,
-    meggitt,
     result,
     auto_test,
 };
@@ -33,18 +32,15 @@ pub const Model = struct {
     recovered: code.Message = @splat(0),
     encode_snaps: [code.n]code.EncoderSnapshot = @splat(.{}),
     syndrome_snaps: [code.n]code.SyndromeSnapshot = @splat(.{}),
-    meggitt_snaps: [code.n]code.MeggittSnapshot = @splat(.{}),
     test_rows: [code.n]code.ErrorTestRow = @splat(.{
         .position = 0,
         .syndrome = @splat(0),
-        .meggitt_pos = null,
         .table_pos = null,
         .recovered_ok = false,
     }),
     clock_index: usize = 0,
     playing: bool = false,
     detected_table: ?usize = null,
-    detected_meggitt: ?usize = null,
     choice_rows: [16]u16 = @splat(0),
     choice_starts: [16]u16 = @splat(0),
     choice_ends: [16]u16 = @splat(0),
@@ -109,10 +105,7 @@ pub const Model = struct {
 
         const locate_start = std.Io.Clock.awake.now(io);
         self.detected_table = code.locateByTable(self.syndrome);
-        const meg = code.simulateMeggitt(self.received, self.syndrome);
-        self.meggitt_snaps = meg.snapshots;
-        self.detected_meggitt = meg.located;
-        self.corrected = meg.corrected;
+        self.corrected = code.correct(self.received, self.syndrome);
         self.locate_ns = elapsedNanoseconds(locate_start, io);
 
         const recover_start = std.Io.Clock.awake.now(io);
@@ -125,7 +118,7 @@ pub const Model = struct {
     }
 
     fn isClocked(self: *const Model) bool {
-        return self.stage == .encode or self.stage == .syndrome or self.stage == .meggitt;
+        return self.stage == .encode or self.stage == .syndrome;
     }
 
     fn stepForward(self: *Model) void {
@@ -158,13 +151,6 @@ pub const Model = struct {
             },
             .channel => self.beginSyndrome(io),
             .syndrome => {
-                if (self.clock_index == code.n) {
-                    self.clock_index = 0;
-                    self.playing = false;
-                    self.stage = .meggitt;
-                }
-            },
-            .meggitt => {
                 if (self.clock_index == code.n) {
                     self.playing = false;
                     self.stage = .result;
@@ -235,7 +221,7 @@ pub const Model = struct {
                     self.input_error = true;
                 }
             },
-            .encode, .syndrome, .meggitt => {
+            .encode, .syndrome => {
                 if (key.matches('p', .{})) {
                     self.togglePlay(ctx);
                 } else if (key.matches(vaxis.Key.space, .{}) or key.matches('n', .{}) or key.matches(vaxis.Key.right, .{})) {
@@ -340,7 +326,7 @@ pub const Model = struct {
                 "Performance: encode snapshots ready | parse {d} ns",
                 .{self.parse_ns},
             ) catch return,
-            .syndrome, .meggitt => std.fmt.allocPrint(
+            .syndrome => std.fmt.allocPrint(
                 ctx.arena,
                 "Performance: transmit {d} ns | syndrome {d} ns | locate {d} ns",
                 .{ self.transmit_ns, self.syndrome_ns, self.locate_ns },
@@ -357,7 +343,7 @@ pub const Model = struct {
     fn drawFull(self: *Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
         const width = surface.size.width;
         ui.putText(surface, ui.centeredColumn(width, 44), 0, "(15,11) CYCLIC CODE SHIFT-REGISTER SIM", ui.title_style);
-        ui.putText(surface, 2, 1, "Message -> Encoder LFSR -> Codeword -> Channel -> Syndrome LFSR -> Meggitt -> Message", ui.muted_style);
+        ui.putText(surface, 2, 1, "Message -> Encoder LFSR -> Codeword -> Channel -> Syndrome LFSR -> Lookup Table -> Message", ui.muted_style);
         ui.putText(surface, 2, 2, "g(x) = 1 + x^3 + x^4    c(x) = p(x) + x^4 m(x)    high-order bit c14 sent first", ui.muted_style);
 
         switch (self.stage) {
@@ -365,7 +351,6 @@ pub const Model = struct {
             .encode => self.drawEncode(surface, ctx),
             .channel => self.drawChannel(surface, ctx),
             .syndrome => self.drawSyndrome(surface, ctx),
-            .meggitt => self.drawMeggitt(surface, ctx),
             .result => self.drawResult(surface, ctx),
             .auto_test => self.drawAutoTest(surface, ctx),
         }
@@ -453,7 +438,7 @@ pub const Model = struct {
         );
 
         const snap = if (self.clock_index == 0) null else self.syndrome_snaps[self.clock_index - 1];
-        ui.drawSyndromeCircuit(surface, ctx.arena, circuit_left, layout.circuit_row, snap, self.clock_index, self.received, false, false);
+        ui.drawSyndromeCircuit(surface, ctx.arena, circuit_left, layout.circuit_row, snap, self.clock_index, self.received);
 
         if (self.clock_index == code.n) {
             const badge_row = layout.circuit_row + ui.circuit_art_rows + 2;
@@ -475,38 +460,8 @@ pub const Model = struct {
         self.drawClockFooter(surface, ctx);
     }
 
-    fn drawMeggitt(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
-        ui.putText(surface, 2, 4, "[5] MEGGITT DECODER  clock S with input 0; fire when S matches x^14 mod g(x)", ui.section_style);
-
-        const circuit_left: u16 = 2;
-        const layout = ui.layoutCircuitAndLog(
-            surface.size.width,
-            surface.size.height,
-            5,
-            circuit_left,
-            ui.syndromeCircuitWidth(),
-            28,
-        );
-
-        const match = if (self.clock_index == 0) false else self.meggitt_snaps[self.clock_index - 1].match;
-        const view = self.meggittView();
-        ui.drawSyndromeCircuit(surface, ctx.arena, circuit_left, layout.circuit_row, view, self.clock_index, self.received, true, match);
-
-        const bit_row = layout.circuit_row + ui.circuit_art_rows;
-        ui.putText(surface, circuit_left, bit_row, "received:", ui.normal);
-        ui.putBits(surface, circuit_left + 10, bit_row, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.normal);
-        if (self.clock_index > 0) {
-            const snap = self.meggitt_snaps[self.clock_index - 1];
-            ui.putText(surface, circuit_left, bit_row + 1, "correct :", ui.normal);
-            ui.putBits(surface, circuit_left + 10, bit_row + 1, snap.corrected_so_far, if (snap.match) snap.examine_index else null, ui.success_style);
-        }
-
-        ui.drawMeggittLog(surface, ctx.arena, layout.log_col, layout.log_row, &self.meggitt_snaps, self.clock_index, layout.log_rows);
-        self.drawClockFooter(surface, ctx);
-    }
-
     fn drawResult(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
-        ui.putText(surface, 2, 4, "[6] CORRECTION AND RECOVERY", ui.section_style);
+        ui.putText(surface, 2, 4, "[5] CORRECTION AND RECOVERY", ui.section_style);
 
         var syn_buf: [4]u8 = undefined;
         const syn_bits = code.formatBits(self.syndrome, &syn_buf);
@@ -524,31 +479,25 @@ pub const Model = struct {
             "Lookup table: S = 0000  ->  no error";
         ui.putText(surface, 2, 8, table_text, ui.warning_style);
 
-        const meg_text = if (self.detected_meggitt) |index|
-            std.fmt.allocPrint(ctx.arena, "Meggitt decoder: pattern fired while examining c{d}", .{index}) catch return
-        else
-            "Meggitt decoder: pattern never fired  ->  no correction";
-        ui.putText(surface, 2, 9, meg_text, ui.warning_style);
-
-        ui.putText(surface, 2, 11, "Received:  ", ui.normal);
-        ui.putBits(surface, 13, 11, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.normal);
-        ui.putText(surface, 2, 12, "Corrected: ", ui.normal);
-        ui.putBitsStyled(surface, 13, 12, self.corrected, self.detected_meggitt, ui.success_style, ui.corrected_style);
-        ui.putText(surface, 2, 14, "Recovered m (c4..c14):", ui.normal);
-        ui.putBits(surface, 26, 14, self.recovered, null, ui.success_style);
+        ui.putText(surface, 2, 10, "Received:  ", ui.normal);
+        ui.putBits(surface, 13, 10, self.received, if (self.error_choice == 0) null else self.error_choice - 1, ui.normal);
+        ui.putText(surface, 2, 11, "Corrected: ", ui.normal);
+        ui.putBitsStyled(surface, 13, 11, self.corrected, self.detected_table, ui.success_style, ui.corrected_style);
+        ui.putText(surface, 2, 13, "Recovered m (c4..c14):", ui.normal);
+        ui.putBits(surface, 26, 13, self.recovered, null, ui.success_style);
 
         if (std.mem.eql(code.Bit, &self.recovered, &self.message)) {
-            ui.putText(surface, 2, 16, "Recovered message matches the original 11-bit input.", ui.success_style);
+            ui.putText(surface, 2, 15, "Recovered message matches the original 11-bit input.", ui.success_style);
         } else {
-            ui.putText(surface, 2, 16, "Recovered message does not match. Check the injected error.", ui.error_style);
+            ui.putText(surface, 2, 15, "Recovered message does not match. Check the injected error.", ui.error_style);
         }
-        ui.putText(surface, 2, 18, "Press t to run the automatic test of all 15 single-bit error locations.", ui.normal);
+        ui.putText(surface, 2, 17, "Press t to run the automatic test of all 15 single-bit error locations.", ui.normal);
         ui.drawFooter(surface, "t auto-test  r new message  q quit");
     }
 
     fn drawAutoTest(self: *const Model, surface: vxfw.Surface, ctx: vxfw.DrawContext) void {
-        ui.putText(surface, 2, 4, "[7] AUTOMATIC SINGLE-BIT ERROR TEST", ui.section_style);
-        ui.putText(surface, 2, 6, "pos   syndrome   table   Meggitt   recovered", ui.section_style);
+        ui.putText(surface, 2, 4, "[6] AUTOMATIC SINGLE-BIT ERROR TEST", ui.section_style);
+        ui.putText(surface, 2, 6, "pos   syndrome   table   recovered", ui.section_style);
         for (self.test_rows, 0..) |row, i| {
             var syn_buf: [4]u8 = undefined;
             const syn_bits = code.formatBits(row.syndrome, &syn_buf);
@@ -556,14 +505,10 @@ pub const Model = struct {
                 std.fmt.allocPrint(ctx.arena, "c{d}", .{p}) catch "?"
             else
                 "none";
-            const meg = if (row.meggitt_pos) |p|
-                std.fmt.allocPrint(ctx.arena, "c{d}", .{p}) catch "?"
-            else
-                "none";
             const line = std.fmt.allocPrint(
                 ctx.arena,
-                " c{d:<2}   {s}      {s:<5}  {s:<5}     {s}",
-                .{ row.position, syn_bits, table, meg, if (row.recovered_ok) "ok" else "FAIL" },
+                " c{d:<2}   {s}      {s:<5}     {s}",
+                .{ row.position, syn_bits, table, if (row.recovered_ok) "ok" else "FAIL" },
             ) catch return;
             const style: vaxis.Style = if (!row.recovered_ok)
                 ui.error_style
@@ -627,22 +572,11 @@ pub const Model = struct {
                 ui.putText(surface, 1, 6, text, ui.warning_style);
                 self.drawClockFooter(surface, ctx);
             },
-            .meggitt => {
-                ui.putText(surface, 1, 2, "Meggitt locator", ui.section_style);
-                const snap = if (self.clock_index == 0) null else self.meggitt_snaps[self.clock_index - 1];
-                self.drawCompactRegisters(surface, 1, 4, if (snap) |s| s.after else @splat(0));
-                if (snap) |s| {
-                    var buf: [48]u8 = undefined;
-                    const text = std.fmt.bufPrint(&buf, "look c{d} match={s}", .{ s.examine_index, if (s.match) "YES" else "no" }) catch return;
-                    ui.putText(surface, 1, 6, text, if (s.match) ui.error_style else ui.normal);
-                }
-                self.drawClockFooter(surface, ctx);
-            },
             .result => {
                 ui.putText(surface, 1, 2, "S:", ui.normal);
                 ui.putBits(surface, 4, 2, self.syndrome, null, ui.warning_style);
                 ui.putText(surface, 1, 4, "fixed:", ui.normal);
-                ui.putBits(surface, 8, 4, self.corrected, self.detected_meggitt, ui.success_style);
+                ui.putBits(surface, 8, 4, self.corrected, self.detected_table, ui.success_style);
                 ui.putText(surface, 1, 8, "m:", ui.normal);
                 ui.putBits(surface, 4, 8, self.recovered, null, ui.success_style);
                 ui.drawFooter(surface, "t test  r reset  q quit");
@@ -706,20 +640,6 @@ pub const Model = struct {
         }
         return word;
     }
-
-    fn meggittView(self: *const Model) ?code.SyndromeSnapshot {
-        if (self.clock_index == 0) return null;
-        const s = self.meggitt_snaps[self.clock_index - 1];
-        return .{
-            .clock = s.clock,
-            .in_bit = 0,
-            .in_index = s.examine_index,
-            .fb = s.fb,
-            .before = s.before,
-            .after = s.after,
-            .d = s.after_correct,
-        };
-    }
 };
 
 fn elapsedNanoseconds(start: std.Io.Timestamp, io: std.Io) u64 {
@@ -747,6 +667,6 @@ test "all-15 error table recovers the original message" {
     try std.testing.expect(model.commitMessage());
     for (model.test_rows) |row| {
         try std.testing.expect(row.recovered_ok);
-        try std.testing.expectEqual(row.table_pos, row.meggitt_pos);
+        try std.testing.expectEqual(@as(?usize, row.position), row.table_pos);
     }
 }

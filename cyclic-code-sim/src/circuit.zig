@@ -105,8 +105,8 @@ pub fn circuitWidth() u16 {
 /// Shared body: left margin for syndrome input XOR, then 4 FFs + gaps, then encoder input XOR.
 /// Relative widths measured from the circuit's left `col`.
 const body_origin_from_col: u16 = 16;
-/// Encoder right side: "════>[XOR]<════" plus padding (label sits under the XOR).
-const right_xor_width: u16 = 18;
+/// Encoder right side: "════>[XOR]<══m0=0" / "gate off".
+const right_xor_width: u16 = 20;
 
 /// Rightmost column used by the encoder diagram relative to its left `col`.
 pub fn encoderCircuitWidth() u16 {
@@ -214,12 +214,12 @@ pub fn drawEncoderCircuit(
     putText(surface, xor_mid, geom.rail_row + 1, "│", bitStyle(fb));
     putText(surface, xor_mid, geom.rail_row + 2, "│", bitStyle(fb));
 
-    // m enters from the right; label sits under the gate (below CLK labels).
-    putText(surface, xor_col + xor_w, geom.body_row + 1, "<════", bitStyle(in_bit));
-    drawInputLabel(surface, arena, xor_col, geom.body_row + 4, snap);
+    // m enters from the right; label sits immediately after the arrow.
+    putText(surface, xor_col + xor_w, geom.body_row + 1, "<══", bitStyle(in_bit));
+    drawInputLabel(surface, arena, xor_col + xor_w + 3, geom.body_row + 1, snap);
 
     drawClkLabels(surface, geom.xs, geom.body_row + 3);
-    drawEncoderStatus(surface, arena, col, geom.body_row + 6, snap, clock_index, message, gate, fb, in_bit);
+    drawEncoderStatus(surface, arena, col, geom.body_row + 5, snap, clock_index, message, gate, fb, in_bit);
 }
 
 pub fn drawSyndromeCircuit(
@@ -230,8 +230,6 @@ pub fn drawSyndromeCircuit(
     snap: ?code.SyndromeSnapshot,
     clock_index: usize,
     received: code.Codeword,
-    meggitt: bool,
-    match: bool,
 ) void {
     const fb: code.Bit = if (snap) |s| s.fb else 0;
     const in_bit: code.Bit = if (snap) |s| s.in_bit else 0;
@@ -274,20 +272,6 @@ pub fn drawSyndromeCircuit(
     }
 
     drawReceivedStrip(surface, col, geom.body_row + 6, received, if (snap) |s| s.in_index else null, clock_index == 0);
-
-    if (meggitt) {
-        const pat = tryFormatBits(arena, code.MEGGITT_PATTERN);
-        const box_style = if (match) error_style else muted_style;
-        // Park the comparator to the right of the shared body, not over the FFs.
-        const box_col = col + body_origin_from_col + bodySpan() + 3;
-        if (box_col + 22 < surface.size.width) {
-            putText(surface, box_col, geom.body_row - 1, "┌────────────────────┐", box_style);
-            putText(surface, box_col, geom.body_row, if (match) "│ MATCH x^14 CORRECT │" else "│ s == pattern ?     │", if (match) changed_style else muted_style);
-            const pat_line = std.fmt.allocPrint(arena, "│ pattern {s}        │", .{pat}) catch return;
-            putText(surface, box_col, geom.body_row + 1, pat_line, box_style);
-            putText(surface, box_col, geom.body_row + 2, "└────────────────────┘", box_style);
-        }
-    }
 }
 
 const SharedGeom = struct {
@@ -382,38 +366,6 @@ pub fn drawSyndromeLog(
             s.after[3],
         }) catch return;
         putText(surface, col, row + line, text, if (i + 1 == clock_index) active_style else normal);
-        line += 1;
-    }
-}
-
-pub fn drawMeggittLog(
-    surface: vxfw.Surface,
-    arena: std.mem.Allocator,
-    col: u16,
-    row: u16,
-    snaps: []const code.MeggittSnapshot,
-    clock_index: usize,
-    max_rows: u16,
-) void {
-    putText(surface, col, row, "clk look bit match s0..s3", section_style);
-    if (clock_index == 0 or max_rows == 0) return;
-    const shown = @min(@as(usize, max_rows), clock_index);
-    const start = clock_index - shown;
-    var line: u16 = 1;
-    var i = start;
-    while (i < clock_index) : (i += 1) {
-        const s = snaps[i];
-        const text = std.fmt.allocPrint(arena, " {d:2} c{d:<2}  {d}  {s}   {d}{d}{d}{d}", .{
-            s.clock,
-            s.examine_index,
-            s.examine_bit,
-            if (s.match) "YES" else "no ",
-            s.after[0],
-            s.after[1],
-            s.after[2],
-            s.after[3],
-        }) catch return;
-        putText(surface, col, row + line, text, if (s.match) changed_style else if (i + 1 == clock_index) active_style else normal);
         line += 1;
     }
 }
@@ -592,13 +544,13 @@ fn drawInputLabel(
     if (snap) |s| {
         if (s.gate) {
             const idx = code.k - s.clock;
-            const text = std.fmt.allocPrint(arena, " m{d}={d}", .{ idx, s.in_bit }) catch return;
+            const text = std.fmt.allocPrint(arena, "m{d}={d}", .{ idx, s.in_bit }) catch return;
             putText(surface, col, row, text, warning_style);
         } else {
-            putText(surface, col, row, " (gate off)", muted_style);
+            putText(surface, col, row, "gate off", muted_style);
         }
     } else {
-        putText(surface, col, row, " m10 first", muted_style);
+        putText(surface, col, row, "m10 first", muted_style);
     }
 }
 

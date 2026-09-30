@@ -13,7 +13,6 @@ pub const Syndrome = Register;
 /// g(x) = 1 + x^3 + x^4, stored as [g0, g1, g2, g3, g4].
 pub const G = [parity_len + 1]Bit{ 1, 0, 0, 1, 1 };
 pub const G_POLY: u16 = polyFromCoeffs(G);
-pub const MEGGITT_PATTERN: Register = remainderFromPoly(modG(@as(u16, 1) << (n - 1)));
 
 pub const ParseError = error{
     WrongLength,
@@ -54,22 +53,9 @@ pub const SyndromeSnapshot = struct {
     d: Register = @splat(0),
 };
 
-pub const MeggittSnapshot = struct {
-    clock: usize = 0,
-    examine_index: usize = 0,
-    examine_bit: Bit = 0,
-    match: bool = false,
-    fb: Bit = 0,
-    before: Register = @splat(0),
-    after_correct: Register = @splat(0),
-    after: Register = @splat(0),
-    corrected_so_far: Codeword = @splat(0),
-};
-
 pub const ErrorTestRow = struct {
     position: usize,
     syndrome: Syndrome,
-    meggitt_pos: ?usize,
     table_pos: ?usize,
     recovered_ok: bool,
 };
@@ -177,49 +163,10 @@ pub fn calculateSyndrome(received: Codeword) Syndrome {
     return simulateSyndrome(received).syndrome;
 }
 
-pub fn simulateMeggitt(
-    received: Codeword,
-    initial_syndrome: Syndrome,
-) struct { snapshots: [n]MeggittSnapshot, corrected: Codeword, located: ?usize } {
-    var reg = initial_syndrome;
-    var word = received;
-    var located: ?usize = null;
-    var snapshots: [n]MeggittSnapshot = @splat(.{});
-
-    for (0..n) |i| {
-        const examine_index = n - 1 - i;
-        const match = std.mem.eql(Bit, &reg, &MEGGITT_PATTERN);
-        const before = reg;
-        if (match) {
-            word[examine_index] ^= 1;
-            located = examine_index;
-            xorRegisters(&reg, MEGGITT_PATTERN);
-        }
-        const after_correct = reg;
-        const step = syndromeStep(reg, 0);
-        snapshots[i] = .{
-            .clock = i + 1,
-            .examine_index = examine_index,
-            .examine_bit = received[examine_index],
-            .match = match,
-            .fb = step.fb,
-            .before = before,
-            .after_correct = after_correct,
-            .after = step.next,
-            .corrected_so_far = word,
-        };
-        reg = step.next;
-    }
-    return .{ .snapshots = snapshots, .corrected = word, .located = located };
-}
-
-pub fn meggittLocate(received: Codeword) ?usize {
-    const syn = calculateSyndrome(received);
-    return simulateMeggitt(received, syn).located;
-}
-
 pub fn correct(received: Codeword, syndrome: Syndrome) Codeword {
-    return simulateMeggitt(received, syndrome).corrected;
+    var corrected = received;
+    if (locateByTable(syndrome)) |index| corrected[index] ^= 1;
+    return corrected;
 }
 
 pub fn recoverMessage(corrected: Codeword) Message {
@@ -250,12 +197,10 @@ pub fn runAllSingleErrors(message: Message) [n]ErrorTestRow {
         const received = transmit(codeword, pos) catch unreachable;
         const syn = calculateSyndrome(received);
         const table_pos = locateByTable(syn);
-        const meggitt = simulateMeggitt(received, syn);
-        const recovered = recoverMessage(meggitt.corrected);
+        const recovered = recoverMessage(correct(received, syn));
         rows[pos] = .{
             .position = pos,
             .syndrome = syn,
-            .meggitt_pos = meggitt.located,
             .table_pos = table_pos,
             .recovered_ok = std.mem.eql(Bit, &recovered, &message),
         };
@@ -302,10 +247,6 @@ fn remainderFromPolyFull(p: u16) Codeword {
     return codeword;
 }
 
-fn xorRegisters(reg: *Register, pattern: Register) void {
-    for (reg, pattern) |*bit, tap| bit.* ^= tap;
-}
-
 fn polyFromCoeffs(coeffs: [parity_len + 1]Bit) u16 {
     var p: u16 = 0;
     for (coeffs, 0..) |bit, index| {
@@ -324,7 +265,6 @@ pub fn formatBits(bits: anytype, buf: []u8) []const u8 {
 
 test "generator polynomial bits match 1 + x^3 + x^4" {
     try std.testing.expectEqual(@as(u16, 0b11001), G_POLY);
-    try std.testing.expectEqualSlices(Bit, &.{ 0, 0, 1, 1 }, &MEGGITT_PATTERN);
 }
 
 test "parseMessage accepts only 11 binary digits" {
@@ -349,24 +289,22 @@ test "shift-register encoder matches polynomial division for all messages" {
     }
 }
 
-test "zero syndrome for a valid codeword and Meggitt idle path" {
+test "zero syndrome for a valid codeword" {
     const message = try parseMessage("11001010111");
     const codeword = encode(message);
     const syn = calculateSyndrome(codeword);
     try std.testing.expect(isZero(syn));
     try std.testing.expectEqual(@as(?usize, null), locateByTable(syn));
-    try std.testing.expectEqual(@as(?usize, null), meggittLocate(codeword));
     try std.testing.expectEqualSlices(Bit, &message, &recoverMessage(correct(codeword, syn)));
 }
 
-test "every single-bit error is located by both methods" {
+test "every single-bit error is located by the lookup table" {
     const message = try parseMessage("10110011101");
     const rows = runAllSingleErrors(message);
     for (rows, 0..) |row, pos| {
         try std.testing.expectEqual(pos, row.position);
         try std.testing.expect(row.recovered_ok);
         try std.testing.expectEqual(@as(?usize, pos), row.table_pos);
-        try std.testing.expectEqual(@as(?usize, pos), row.meggitt_pos);
         try std.testing.expect(!isZero(row.syndrome));
         try std.testing.expectEqualSlices(Bit, &syndromeTable()[pos], &row.syndrome);
     }
@@ -400,7 +338,7 @@ test "handout cases: no error and errors at beginning, middle, and end" {
 
     const clean = try transmit(codeword, null);
     try std.testing.expect(isZero(calculateSyndrome(clean)));
-    try std.testing.expectEqual(@as(?usize, null), meggittLocate(clean));
+    try std.testing.expectEqual(@as(?usize, null), locateByTable(calculateSyndrome(clean)));
     try std.testing.expectEqualSlices(Bit, &message, &recoverMessage(clean));
 
     for ([_]usize{ 0, 7, 14 }) |pos| {
@@ -408,7 +346,6 @@ test "handout cases: no error and errors at beginning, middle, and end" {
         const syn = calculateSyndrome(received);
         try std.testing.expect(!isZero(syn));
         try std.testing.expectEqual(@as(?usize, pos), locateByTable(syn));
-        try std.testing.expectEqual(@as(?usize, pos), meggittLocate(received));
         try std.testing.expectEqualSlices(Bit, &message, &recoverMessage(correct(received, syn)));
     }
 }
