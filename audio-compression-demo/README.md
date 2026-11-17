@@ -17,8 +17,8 @@ Batch encode/decode without the TUI (writes `.wac` + reconstructed WAV and
 prints metrics):
 
 ```sh
-uv run python main.py --batch king_injustice.wav
-uv run python main.py --batch speech_clip.wav --wavelet haar --level 5 \
+uv run python main.py --batch audio/metal-pipe-falling.wav
+uv run python main.py --batch audio/vine-boom.wav --wavelet haar --level 5 \
   --technique soft --threshold 0.2
 ```
 
@@ -43,7 +43,7 @@ uv run python main.py --self-test
 
 Stages: **Input → DWT → Threshold → Encode → Decode → Playback**.
 
-- **Input** — pick any `*.wav` in the demo folder (except `*_reconstructed.wav`).
+- **Input** — pick any `*.wav` from the [`audio/`](audio/) directory (except `*_reconstructed.wav`).
 - **DWT** — pick filter (`haar`, `db2`, `db4`, `db8`, `sym4`, `coif2`, `bior2.2`) and level.
 - **Threshold** — pick technique and `T` (`0.05`, `0.1`, `0.2`, `0.5`).
 
@@ -65,23 +65,13 @@ The bottom bar reports real-time delay of each stage in milliseconds (`load`,
 
 ## Input audio
 
-Selectable clips shipped in this folder include `king_injustice.wav`,
-`speech_clip.wav` (1.5 s excerpt), and any other `*.wav` you drop in.
+Input clips live in [`audio/`](audio/). Drop any `*.wav` there to make it
+selectable in the Input stage. Example files currently include
+`metal-pipe-falling.wav`, `vine-boom.wav`, `fah.wav`, and others.
 
-Default reported results below use `king_injustice.wav`:
-
-| Item | Value |
-|------|-------|
-| File | `king_injustice.wav` |
-| Duration | 4.638 s |
-| Sampling rate | 11025 Hz |
-| Channels | 1 (mono) |
-| Bit depth (ratio reference) | 16 |
-| Samples | 51 138 |
-| Original sample bits | 51 138 × 16 = **818 208** |
-| On-disk size | 14 336 bytes |
-
-Stereo inputs are mixed to mono before compression.
+Stereo inputs are mixed to mono before compression. Reported metrics in this
+README are from a representative run; re-run the TUI or `--batch` on a chosen
+file for exact numbers.
 
 ## Wavelet experiment
 
@@ -196,11 +186,9 @@ ratio while keeping speech understandable.
 | `src/codec.py` | DWT, threshold, quantize, 24-bit RLE, `.wac` I/O, SNR |
 | `src/app.py` | Textual staged UI + playback |
 | `src/timing.py` | `perf_counter_ns` helpers |
-| `king_injustice.wav` | Primary source clip |
-| `speech_clip.wav` | Short selectable excerpt |
-| `*.wav` | Any additional inputs discovered by the Input stage |
-| `king_injustice.wac` | Encoded bitstream |
-| `king_injustice_reconstructed.wav` | Final decoded audio |
+| `audio/` | Selectable input WAV library |
+| `audio/*.wav` | Inputs listed by the Input stage |
+| `*.wac` / `*_reconstructed.wav` | Encoded bitstream and decoded audio (written next to the chosen input) |
 | `audiocompression.m` | MATLAB reference sketch |
 | `pyproject.toml` / `uv.lock` | uv-managed dependencies |
 

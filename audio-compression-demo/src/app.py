@@ -143,15 +143,26 @@ class AudioCompressionApp(App[None]):
     def __init__(self, wav_path: str | Path | None = None) -> None:
         super().__init__()
         self.demo_dir = Path(__file__).resolve().parent.parent
-        self.wav_choices = codec.list_input_wavs(self.demo_dir)
+        self.audio_dir = codec.audio_dir(self.demo_dir)
+        self.wav_choices = codec.list_input_wavs(self.audio_dir)
         if not self.wav_choices:
-            fallback = self.demo_dir / "king_injustice.wav"
-            self.wav_choices = [fallback]
+            raise FileNotFoundError(
+                f"No WAV files found in {self.audio_dir}. "
+                "Add input audio under the audio/ directory."
+            )
 
         initial = Path(wav_path) if wav_path else self.wav_choices[0]
         if not initial.is_file():
-            candidate = self.demo_dir / initial.name
-            initial = candidate if candidate.is_file() else self.wav_choices[0]
+            for candidate in (
+                self.audio_dir / initial.name,
+                self.demo_dir / initial.name,
+                initial,
+            ):
+                if candidate.is_file():
+                    initial = candidate
+                    break
+            else:
+                initial = self.wav_choices[0]
 
         self.wav_index = 0
         for i, path in enumerate(self.wav_choices):
@@ -548,7 +559,10 @@ class AudioCompressionApp(App[None]):
 
         if self.stage == 0 and not self.stage_done:
             log.write("[bold cyan]Stage 1 — Input audio[/]")
-            log.write("Select a WAV, then press [bold]Enter[/] to load.")
+            log.write(
+                f"Select a WAV from [bold]{self.audio_dir.name}/[/], "
+                "then press [bold]Enter[/] to load."
+            )
             log.write("")
             for i, path in enumerate(self.wav_choices):
                 log.write(

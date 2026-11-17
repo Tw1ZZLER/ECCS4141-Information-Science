@@ -91,9 +91,18 @@ def max_decomposition_level(n_samples: int, wavelet: str) -> int:
     return max(1, pywt.dwt_max_level(n_samples, pywt.Wavelet(wavelet).dec_len))
 
 
-def list_input_wavs(directory: str | Path) -> list[Path]:
-    """WAV files available for selection (excludes reconstructed outputs)."""
-    directory = Path(directory)
+def audio_dir(project_root: str | Path | None = None) -> Path:
+    """Directory containing selectable input WAVs."""
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    return Path(project_root) / "audio"
+
+
+def list_input_wavs(directory: str | Path | None = None) -> list[Path]:
+    """WAV files available for selection under ``audio/`` (excludes reconstructions)."""
+    directory = audio_dir() if directory is None else Path(directory)
+    if not directory.is_dir():
+        return []
     files = sorted(
         p
         for p in directory.glob("*.wav")

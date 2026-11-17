@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
         "wav",
         nargs="?",
         default=None,
-        help="initial WAV selection (default: first *.wav in the demo folder)",
+        help="initial WAV selection (default: first *.wav in audio/)",
     )
     parser.add_argument(
         "--self-test",
@@ -66,22 +66,28 @@ def main(argv: list[str] | None = None) -> int:
         print("handout encoding examples: OK")
         return 0
 
+    audio_root = codec.audio_dir(root)
     wav_path: Path | None
     if args.wav is None:
-        wav_path = None if not args.batch else root / "king_injustice.wav"
+        choices = codec.list_input_wavs(audio_root)
+        wav_path = None if not args.batch else (choices[0] if choices else None)
     else:
         wav_path = Path(args.wav)
         if not wav_path.is_file():
-            candidate = root / args.wav
-            if candidate.is_file():
-                wav_path = candidate
+            for candidate in (audio_root / args.wav, root / args.wav):
+                if candidate.is_file():
+                    wav_path = candidate
+                    break
             else:
                 print(f"error: WAV not found: {args.wav}", file=sys.stderr)
                 return 1
 
     if args.batch:
         if wav_path is None or not wav_path.is_file():
-            print("error: WAV required for --batch", file=sys.stderr)
+            print(
+                f"error: WAV required for --batch (looked in {audio_root})",
+                file=sys.stderr,
+            )
             return 1
         kwargs: dict = {}
         if args.wavelet is not None:
