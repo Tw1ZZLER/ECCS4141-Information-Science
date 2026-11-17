@@ -23,6 +23,13 @@ STAGE_NAMES = (
     "Playback",
 )
 
+# Focus targets while configuring a stage (before Enter runs it).
+FOCUS_FILE = "file"
+FOCUS_WAVELET = "wavelet"
+FOCUS_LEVEL = "level"
+FOCUS_TECHNIQUE = "technique"
+FOCUS_T = "threshold"
+
 
 def _fmt_ms(ns: int) -> str:
     return f"{ns / 1_000_000:.3f} ms"
@@ -32,6 +39,14 @@ def _fmt_snr(snr: float) -> str:
     if np.isinf(snr):
         return "infinite"
     return f"{snr:.3f} dB"
+
+
+def _mark(selected: bool, active_focus: bool, label: str) -> str:
+    cursor = ">" if active_focus else " "
+    bullet = "*" if selected else " "
+    style_open = "[reverse bold]" if active_focus and selected else ("[bold]" if selected else "")
+    style_close = "[/]" if style_open else ""
+    return f" {cursor}{bullet} {style_open}{label}{style_close}"
 
 
 class MetricsBar(Static):
@@ -72,7 +87,7 @@ class StageBanner(Static):
 
 
 class AudioCompressionApp(App[None]):
-    """Staged encode / decode / playback demonstration."""
+    """Staged encode / decode / playback demonstration with interactive choices."""
 
     CSS = """
     Screen {
@@ -93,7 +108,7 @@ class AudioCompressionApp(App[None]):
         padding: 1 2;
     }
     #side {
-        width: 40;
+        width: 42;
         border: solid $surface;
         padding: 1;
     }
@@ -106,17 +121,53 @@ class AudioCompressionApp(App[None]):
     """
 
     BINDINGS = [
-        Binding("enter", "advance", "Next", show=True),
-        Binding("space", "advance", "Next", show=False),
+        Binding("enter", "advance", "Run/Next", show=True),
+        Binding("space", "advance", "Run/Next", show=False),
+        Binding("up", "move_up", "Up", show=False),
+        Binding("down", "move_down", "Down", show=False),
+        Binding("k", "move_up", "Up", show=False),
+        Binding("j", "move_down", "Down", show=False),
+        Binding("left", "nudge_left", "Nudge-", show=False),
+        Binding("right", "nudge_right", "Nudge+", show=False),
+        Binding("minus", "nudge_left", "Nudge-", show=False),
+        Binding("plus", "nudge_right", "Nudge+", show=False),
+        Binding("=", "nudge_right", "Nudge+", show=False),
+        Binding("tab", "cycle_focus", "Focus", show=True),
+        Binding("shift+tab", "cycle_focus_back", "Focus", show=False),
         Binding("o", "play_original", "Play orig", show=True),
         Binding("p", "play_recon", "Play recon", show=True),
         Binding("r", "reset", "Reset", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
-    def __init__(self, wav_path: str | Path) -> None:
+    def __init__(self, wav_path: str | Path | None = None) -> None:
         super().__init__()
-        self.wav_path = Path(wav_path)
+        self.demo_dir = Path(__file__).resolve().parent.parent
+        self.wav_choices = codec.list_input_wavs(self.demo_dir)
+        if not self.wav_choices:
+            fallback = self.demo_dir / "king_injustice.wav"
+            self.wav_choices = [fallback]
+
+        initial = Path(wav_path) if wav_path else self.wav_choices[0]
+        if not initial.is_file():
+            candidate = self.demo_dir / initial.name
+            initial = candidate if candidate.is_file() else self.wav_choices[0]
+
+        self.wav_index = 0
+        for i, path in enumerate(self.wav_choices):
+            if path.resolve() == initial.resolve() or path.name == initial.name:
+                self.wav_index = i
+                break
+
+        self.wavelet_choices = list(codec.AVAILABLE_WAVELETS)
+        self.wavelet_index = self.wavelet_choices.index(codec.DEFAULT_WAVELET)
+        self.level = codec.DEFAULT_LEVEL
+        self.technique_choices = list(codec.ThresholdTechnique)
+        self.technique_index = self.technique_choices.index(codec.DEFAULT_TECHNIQUE)
+        self.threshold_choices = list(codec.THRESHOLD_PRESETS)
+        self.threshold_index = self.threshold_choices.index(codec.DEFAULT_THRESHOLD)
+
+        self.focus = FOCUS_FILE
         self.stage = 0
         self.stage_done = False
         self.info: codec.AudioInfo | None = None
@@ -125,10 +176,37 @@ class AudioCompressionApp(App[None]):
         self.encode: codec.EncodeResult | None = None
         self.decode: codec.DecodeResult | None = None
         self.timings = codec.PipelineTimings()
+        self._sync_output_paths()
+
+    @property
+    def wav_path(self) -> Path:
+        return self.wav_choices[self.wav_index]
+
+    @property
+    def wavelet(self) -> str:
+        return self.wavelet_choices[self.wavelet_index]
+
+    @property
+    def technique(self) -> codec.ThresholdTechnique:
+        return self.technique_choices[self.technique_index]
+
+    @property
+    def threshold(self) -> float:
+        return self.threshold_choices[self.threshold_index]
+
+    def _sync_output_paths(self) -> None:
         self.compressed_path = self.wav_path.with_suffix(".wac")
         self.reconstructed_path = self.wav_path.with_name(
             self.wav_path.stem + "_reconstructed.wav"
         )
+
+    def _max_level(self) -> int:
+        if self.info is None:
+            return max(1, self.level)
+        return codec.max_decomposition_level(self.info.samples.shape[0], self.wavelet)
+
+    def _clamp_level(self) -> None:
+        self.level = max(1, min(self.level, self._max_level()))
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -141,31 +219,37 @@ class AudioCompressionApp(App[None]):
 
     def on_mount(self) -> None:
         self.title = "Audio Compression Demo"
-        self.sub_title = (
-            f"{self.wav_path.name}  ·  "
-            f"{codec.DEFAULT_TRANSFORM} {codec.DEFAULT_WAVELET} (Daubechies)"
-        )
+        self._update_subtitle()
         self.query_one("#banner", StageBanner).show(0)
         self.query_one("#metrics", MetricsBar).show(self.timings)
         self._render_stage()
 
+    def _update_subtitle(self) -> None:
+        self.sub_title = (
+            f"{self.wav_path.name}  ·  "
+            f"{codec.DEFAULT_TRANSFORM} {self.wavelet} L{self.level}  ·  "
+            f"{self.technique.value} T={self.threshold}"
+        )
+
     def _side_panel(self, status: str | None = None) -> str:
         lines = [
             "[bold]Controls[/]",
-            "Enter/Space  next stage",
-            "o            play original",
-            "p            play reconstructed",
-            "r            reset",
-            "q            quit",
+            "↑↓/jk       move selection",
+            "Tab         switch focus",
+            "←→ / -+     nudge level/T",
+            "Enter/Space run or next",
+            "o / p       play orig/recon",
+            "r           reset",
+            "q           quit",
             "",
             f"[bold]Stage[/] {self.stage + 1}/{len(STAGE_NAMES)}",
-            f"[bold]File[/]  {self.wav_path.name}",
             "",
-            "[bold]Transform[/]",
-            f"{codec.DEFAULT_TRANSFORM} (discrete)",
-            "Family  Daubechies",
-            f"Wavelet {codec.DEFAULT_WAVELET} "
-            f"({codec.DEFAULT_WAVELET_VANISHING_MOMENTS} vanishing moments)",
+            "[bold]Session[/]",
+            f"File   {self.wav_path.name}",
+            f"Filter {self.wavelet}",
+            f"Level  {self.level}",
+            f"Tech   {self.technique.value}",
+            f"T      {self.threshold}",
         ]
         if status:
             lines.extend(["", f"[bold]Status[/]\n{status}"])
@@ -174,12 +258,15 @@ class AudioCompressionApp(App[None]):
     def action_reset(self) -> None:
         self.stage = 0
         self.stage_done = False
+        self.focus = FOCUS_FILE
         self.info = None
         self.coeffs = None
         self.thresholded = None
         self.encode = None
         self.decode = None
         self.timings = codec.PipelineTimings()
+        self._sync_output_paths()
+        self._update_subtitle()
         self.query_one("#banner", StageBanner).show(0)
         self.query_one("#metrics", MetricsBar).show(self.timings, "[dim]reset[/]")
         self._render_stage()
@@ -188,14 +275,95 @@ class AudioCompressionApp(App[None]):
         if not self.stage_done:
             self._run_stage(self.stage)
             self.stage_done = True
+            self._set_focus_for_stage(self.stage)
         elif self.stage < len(STAGE_NAMES) - 1:
             self.stage += 1
-            self._run_stage(self.stage)
-            self.stage_done = True
+            self.stage_done = False
+            self._set_focus_for_stage(self.stage)
+            # Encode / Decode / Playback auto-run on entry (no further config).
+            if self.stage >= 3:
+                self._run_stage(self.stage)
+                self.stage_done = True
         else:
             return
+        self._update_subtitle()
         self.query_one("#banner", StageBanner).show(self.stage)
         self.query_one("#metrics", MetricsBar).show(self.timings)
+        self._render_stage()
+
+    def _set_focus_for_stage(self, stage: int) -> None:
+        if stage == 0:
+            self.focus = FOCUS_FILE
+        elif stage == 1:
+            self.focus = FOCUS_WAVELET
+        elif stage == 2:
+            self.focus = FOCUS_TECHNIQUE
+        else:
+            self.focus = FOCUS_FILE
+
+    def action_cycle_focus(self) -> None:
+        if self.stage_done:
+            return
+        if self.stage == 1:
+            self.focus = FOCUS_LEVEL if self.focus == FOCUS_WAVELET else FOCUS_WAVELET
+        elif self.stage == 2:
+            self.focus = FOCUS_T if self.focus == FOCUS_TECHNIQUE else FOCUS_TECHNIQUE
+        self._render_stage()
+
+    def action_cycle_focus_back(self) -> None:
+        self.action_cycle_focus()
+
+    def action_move_up(self) -> None:
+        self._move_selection(-1)
+
+    def action_move_down(self) -> None:
+        self._move_selection(1)
+
+    def action_nudge_left(self) -> None:
+        self._nudge(-1)
+
+    def action_nudge_right(self) -> None:
+        self._nudge(1)
+
+    def _move_selection(self, delta: int) -> None:
+        if self.stage_done and self.stage < 3:
+            # Allow re-picking only before the stage has been run; after run, wait for next.
+            return
+        if self.stage == 0 and self.focus == FOCUS_FILE:
+            self.wav_index = (self.wav_index + delta) % len(self.wav_choices)
+            self._sync_output_paths()
+        elif self.stage == 1 and self.focus == FOCUS_WAVELET:
+            self.wavelet_index = (self.wavelet_index + delta) % len(self.wavelet_choices)
+            self._clamp_level()
+        elif self.stage == 1 and self.focus == FOCUS_LEVEL:
+            self.level = max(1, min(self._max_level(), self.level + delta))
+        elif self.stage == 2 and self.focus == FOCUS_TECHNIQUE:
+            self.technique_index = (
+                self.technique_index + delta
+            ) % len(self.technique_choices)
+        elif self.stage == 2 and self.focus == FOCUS_T:
+            self.threshold_index = (
+                self.threshold_index + delta
+            ) % len(self.threshold_choices)
+        else:
+            return
+        self._update_subtitle()
+        self._render_stage()
+
+    def _nudge(self, delta: int) -> None:
+        if self.stage_done:
+            return
+        if self.stage == 1:
+            self.focus = FOCUS_LEVEL
+            self.level = max(1, min(self._max_level(), self.level + delta))
+        elif self.stage == 2:
+            self.focus = FOCUS_T
+            self.threshold_index = (
+                self.threshold_index + delta
+            ) % len(self.threshold_choices)
+        else:
+            return
+        self._update_subtitle()
         self._render_stage()
 
     def action_play_original(self) -> None:
@@ -228,26 +396,47 @@ class AudioCompressionApp(App[None]):
 
     def _run_stage(self, stage: int) -> None:
         if stage == 0:
-            self.info, self.timings.load_ns = timed(lambda: codec.load_audio(self.wav_path))
+            self._sync_output_paths()
+            self.info, self.timings.load_ns = timed(
+                lambda: codec.load_audio(self.wav_path)
+            )
+            self._clamp_level()
         elif stage == 1:
             assert self.info is not None
+            self._clamp_level()
+            level = self.level
+            wavelet = self.wavelet
             self.coeffs, self.timings.dwt_ns = timed(
-                lambda: codec.decompose(self.info.samples)
+                lambda: codec.decompose(
+                    self.info.samples,
+                    wavelet=wavelet,
+                    level=level,
+                    mode=codec.DEFAULT_MODE,
+                )
             )
+            self.level = len(self.coeffs) - 1
         elif stage == 2:
             assert self.coeffs is not None and self.info is not None
+            technique = self.technique
+            threshold = self.threshold
             self.thresholded, self.timings.threshold_ns = timed(
-                lambda: codec.apply_hard_threshold(self.coeffs)
+                lambda: codec.apply_threshold(
+                    self.coeffs,
+                    threshold=threshold,
+                    technique=technique,
+                )
             )
         elif stage == 3:
             assert self.thresholded is not None and self.info is not None
+            wavelet = self.wavelet
+            mode = codec.DEFAULT_MODE
 
             def _encode() -> codec.EncodeResult:
                 flat = codec.flatten_coeffs(self.thresholded)
                 y_thr = codec.reconstruct(
                     self.thresholded,
-                    codec.DEFAULT_WAVELET,
-                    codec.DEFAULT_MODE,
+                    wavelet,
+                    mode,
                     self.info.samples.shape[0],
                 )
                 snr_thr = codec.snr_db(self.info.samples, y_thr)
@@ -264,9 +453,9 @@ class AudioCompressionApp(App[None]):
                     zero_pct_threshold=codec.zero_percentage(flat),
                     zero_pct_quantized=codec.zero_percentage(quantized),
                     snr_threshold_db=snr_thr,
-                    wavelet=codec.DEFAULT_WAVELET,
+                    wavelet=wavelet,
                     level=len(self.thresholded) - 1,
-                    mode=codec.DEFAULT_MODE,
+                    mode=mode,
                     fractional_bits=codec.DEFAULT_F,
                     n_samples=self.info.samples.shape[0],
                     sample_rate=self.info.sample_rate,
@@ -350,7 +539,6 @@ class AudioCompressionApp(App[None]):
                 coeffs_match_encoded=match,
             )
         elif stage == 5:
-            # Playback stage: no extra compute.
             return
 
     def _render_stage(self) -> None:
@@ -360,20 +548,20 @@ class AudioCompressionApp(App[None]):
 
         if self.stage == 0 and not self.stage_done:
             log.write("[bold cyan]Stage 1 — Input audio[/]")
+            log.write("Select a WAV, then press [bold]Enter[/] to load.")
             log.write("")
-            log.write(f"Source: {self.wav_path}")
-            log.write("Press [bold]Enter[/] to load the WAV and measure I/O time.")
+            for i, path in enumerate(self.wav_choices):
+                log.write(
+                    _mark(
+                        i == self.wav_index,
+                        self.focus == FOCUS_FILE,
+                        path.name,
+                    )
+                )
             log.write("")
-            log.write(f"[bold]Transform[/]  {codec.wavelet_description()}")
             log.write(
-                "PyWavelets multilevel [bold]DWT[/] (Mallat filter bank), "
-                f"family [bold]{codec.DEFAULT_WAVELET_FAMILY}[/], "
-                f"code [bold]{codec.DEFAULT_WAVELET}[/]."
-            )
-            log.write("")
-            log.write(
-                "Pipeline: DWT → hard threshold → fixed-point quantize → "
-                "24-bit (count, coeff) records → .wac → decode → inverse DWT."
+                "Pipeline: DWT → threshold → fixed-point quantize → "
+                "24-bit records → .wac → decode → inverse DWT."
             )
             return
 
@@ -391,7 +579,34 @@ class AudioCompressionApp(App[None]):
             log.write(f"File size:      {info.file_bytes:,} bytes")
             log.write(f"Peak |x|:       {float(np.max(np.abs(info.samples))):.4f}")
             log.write("")
-            log.write(f"Transform:      {codec.wavelet_description()}")
+            log.write("Press [bold]Enter[/] for DWT filter/level selection.")
+            return
+
+        if self.stage == 1 and not self.stage_done:
+            max_level = self._max_level()
+            log.write("[bold cyan]Stage 2 — Discrete wavelet transform (DWT)[/]")
+            log.write("Choose filter and level, then [bold]Enter[/] to run wavedec.")
+            log.write(f"Focus: [bold]{self.focus}[/]  (Tab to switch)")
+            log.write("")
+            log.write("[bold]Filter[/]")
+            for i, name in enumerate(self.wavelet_choices):
+                log.write(
+                    _mark(
+                        i == self.wavelet_index,
+                        self.focus == FOCUS_WAVELET,
+                        f"{name}  —  {codec.wavelet_description(name)}",
+                    )
+                )
+            log.write("")
+            log.write("[bold]Level[/]")
+            log.write(
+                _mark(
+                    True,
+                    self.focus == FOCUS_LEVEL,
+                    f"{self.level}  (max {max_level} for this signal/filter)",
+                )
+            )
+            log.write("Use ←→ or -+ to change level.")
             return
 
         if self.stage == 1 and self.coeffs is not None:
@@ -399,11 +614,8 @@ class AudioCompressionApp(App[None]):
             log.write("[bold cyan]Stage 2 — Discrete wavelet transform (DWT)[/]")
             log.write("")
             log.write("Kind:           multilevel DWT")
-            log.write(f"Family:         {codec.DEFAULT_WAVELET_FAMILY} orthogonal")
-            log.write(
-                f"Wavelet:        {codec.DEFAULT_WAVELET} "
-                f"({codec.DEFAULT_WAVELET_VANISHING_MOMENTS} vanishing moments)"
-            )
+            log.write(f"Transform:      {codec.wavelet_description(self.wavelet)}")
+            log.write(f"Wavelet:        {self.wavelet}")
             log.write(f"Level:          {len(self.coeffs) - 1}")
             log.write(f"Extension:      {codec.DEFAULT_MODE}")
             log.write(f"Coeff vector:   {sum(sizes):,} coefficients")
@@ -413,34 +625,57 @@ class AudioCompressionApp(App[None]):
                 "Implemented with PyWavelets wavedec/waverec (Mallat algorithm). "
                 "Ordering: [cA_L, cD_L, cD_L-1, …, cD_1]."
             )
-            log.write(
-                "Ref: https://en.wikipedia.org/wiki/Discrete_wavelet_transform"
-            )
+            log.write("Press [bold]Enter[/] for threshold technique selection.")
+            return
+
+        if self.stage == 2 and not self.stage_done:
+            log.write("[bold cyan]Stage 3 — Thresholding[/]")
+            log.write("Choose technique and T, then [bold]Enter[/] to apply.")
+            log.write(f"Focus: [bold]{self.focus}[/]  (Tab to switch)")
+            log.write("")
+            log.write("[bold]Technique[/]")
+            for i, tech in enumerate(self.technique_choices):
+                log.write(
+                    _mark(
+                        i == self.technique_index,
+                        self.focus == FOCUS_TECHNIQUE,
+                        f"{tech.value}  —  {tech.label}",
+                    )
+                )
+            log.write("")
+            log.write("[bold]Threshold T[/]")
+            for i, value in enumerate(self.threshold_choices):
+                log.write(
+                    _mark(
+                        i == self.threshold_index,
+                        self.focus == FOCUS_T,
+                        f"{value}",
+                    )
+                )
             return
 
         if self.stage == 2 and self.thresholded is not None and self.info is not None:
             flat = codec.flatten_coeffs(self.thresholded)
             y_thr = codec.reconstruct(
                 self.thresholded,
-                codec.DEFAULT_WAVELET,
+                self.wavelet,
                 codec.DEFAULT_MODE,
                 self.info.samples.shape[0],
             )
             snr = codec.snr_db(self.info.samples, y_thr)
-            log.write("[bold cyan]Stage 3 — Hard thresholding[/]")
+            log.write("[bold cyan]Stage 3 — Thresholding[/]")
             log.write("")
-            log.write("Policy (MATLAB-inspired):")
-            log.write("  • zero approximation band")
-            log.write("  • zero detail levels 6–10 and level 1")
-            log.write("  • hard-threshold levels 2–5 at T = 0.1")
+            log.write(f"Technique:       {self.technique.label} ({self.technique.value})")
+            log.write(f"Threshold T:     {self.threshold}")
+            if self.technique is codec.ThresholdTechnique.HARD_MATLAB:
+                zero, mid = codec.matlab_band_sets(len(self.thresholded) - 1)
+                log.write(f"Zeroed details:  {sorted(zero)}")
+                log.write(f"Hard mid-bands:  {sorted(mid)}")
             log.write("")
             log.write(f"Zero coefficients: {codec.zero_percentage(flat):.3f}%")
             log.write(f"SNR (float recon): {_fmt_snr(snr)}")
             log.write("")
-            log.write(
-                "Coarse bands and finest detail are discarded to create long zero "
-                "runs; mid bands keep perceptually important structure."
-            )
+            log.write("Press [bold]Enter[/] to quantize and encode 24-bit records.")
             return
 
         if self.stage == 3 and self.encode is not None:
@@ -448,6 +683,8 @@ class AudioCompressionApp(App[None]):
             f = enc.fractional_bits
             log.write("[bold cyan]Stage 4 — Quantize + 24-bit encode[/]")
             log.write("")
+            log.write(f"Wavelet/level:     {enc.wavelet} / {enc.level}")
+            log.write(f"Technique / T:     {self.technique.value} / {self.threshold}")
             log.write(f"Fractional bits F: {f}")
             log.write(f"Resolution:        2^-F = {2 ** (-f)}")
             log.write(
@@ -496,6 +733,8 @@ class AudioCompressionApp(App[None]):
             log.write(f"Original:         {self.wav_path.name}")
             log.write(f"Reconstructed:    {self.reconstructed_path.name}")
             log.write(f"Compressed:       {self.compressed_path.name}")
+            log.write(f"Filter / level:   {self.wavelet} / {self.level}")
+            log.write(f"Technique / T:    {self.technique.value} / {self.threshold}")
             log.write("")
             log.write(f"Threshold SNR:    {_fmt_snr(enc.snr_threshold_db)}")
             log.write(f"Final SNR:        {_fmt_snr(dec.snr_db)}")
@@ -508,5 +747,5 @@ class AudioCompressionApp(App[None]):
         log.write("Working…")
 
 
-def run_app(wav_path: str | Path) -> None:
+def run_app(wav_path: str | Path | None = None) -> None:
     AudioCompressionApp(wav_path).run()

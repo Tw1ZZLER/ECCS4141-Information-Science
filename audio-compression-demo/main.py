@@ -15,8 +15,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "wav",
         nargs="?",
-        default="king_injustice.wav",
-        help="uncompressed WAV to compress (default: king_injustice.wav)",
+        default=None,
+        help="initial WAV selection (default: first *.wav in the demo folder)",
     )
     parser.add_argument(
         "--self-test",
@@ -27,6 +27,29 @@ def main(argv: list[str] | None = None) -> int:
         "--batch",
         action="store_true",
         help="run encode/decode without the TUI and print metrics",
+    )
+    parser.add_argument(
+        "--wavelet",
+        default=None,
+        help="batch wavelet filter (default: db4)",
+    )
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        help="batch decomposition level (default: 10, clamped to max)",
+    )
+    parser.add_argument(
+        "--technique",
+        choices=["hard", "soft", "hard_matlab", "soft_uniform"],
+        default=None,
+        help="batch thresholding technique (default: hard_matlab)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="batch threshold T (default: 0.1)",
     )
     args = parser.parse_args(argv)
 
@@ -43,17 +66,33 @@ def main(argv: list[str] | None = None) -> int:
         print("handout encoding examples: OK")
         return 0
 
-    wav_path = Path(args.wav)
-    if not wav_path.is_file():
-        candidate = root / args.wav
-        if candidate.is_file():
-            wav_path = candidate
-        else:
-            print(f"error: WAV not found: {args.wav}", file=sys.stderr)
-            return 1
+    wav_path: Path | None
+    if args.wav is None:
+        wav_path = None if not args.batch else root / "king_injustice.wav"
+    else:
+        wav_path = Path(args.wav)
+        if not wav_path.is_file():
+            candidate = root / args.wav
+            if candidate.is_file():
+                wav_path = candidate
+            else:
+                print(f"error: WAV not found: {args.wav}", file=sys.stderr)
+                return 1
 
     if args.batch:
-        result = codec.run_pipeline(wav_path)
+        if wav_path is None or not wav_path.is_file():
+            print("error: WAV required for --batch", file=sys.stderr)
+            return 1
+        kwargs: dict = {}
+        if args.wavelet is not None:
+            kwargs["wavelet"] = args.wavelet
+        if args.level is not None:
+            kwargs["level"] = args.level
+        if args.technique is not None:
+            kwargs["technique"] = args.technique
+        if args.threshold is not None:
+            kwargs["threshold"] = args.threshold
+        result = codec.run_pipeline(wav_path, **kwargs)
         enc = result.encode
         dec = result.decode
         t = result.timings
@@ -63,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"bit depth:      {result.info.bit_depth}")
         print(f"sample bits:    {result.info.original_sample_bits}")
         print(f"wavelet:        {enc.wavelet} level {enc.level} mode={enc.mode}")
+        print(
+            f"threshold:      technique="
+            f"{args.technique or codec.DEFAULT_TECHNIQUE.value} "
+            f"T={args.threshold if args.threshold is not None else codec.DEFAULT_THRESHOLD}"
+        )
         print(f"F:              {enc.fractional_bits}")
         print(f"zero% thresh:   {enc.zero_pct_threshold:.4f}")
         print(f"zero% quant:    {enc.zero_pct_quantized:.4f}")
@@ -76,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"match:          {dec.coeffs_match_encoded}")
         print(f"wrote:          {result.compressed_path}")
         print(f"wrote:          {result.reconstructed_path}")
+
         def _ms(ns: int) -> str:
             return f"{ns / 1_000_000:.3f}"
 

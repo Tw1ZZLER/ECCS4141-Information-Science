@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,38 @@ DEFAULT_F = 12
 DEFAULT_ZERO_DETAIL_LEVELS = frozenset({1, 6, 7, 8, 9, 10})
 DEFAULT_THRESHOLD_DETAIL_LEVELS = frozenset({2, 3, 4, 5})
 
+AVAILABLE_WAVELETS = (
+    "haar",
+    "db2",
+    "db4",
+    "db8",
+    "sym4",
+    "coif2",
+    "bior2.2",
+)
+THRESHOLD_PRESETS = (0.05, 0.1, 0.2, 0.5)
+
+
+class ThresholdTechnique(str, Enum):
+    HARD = "hard"
+    SOFT = "soft"
+    HARD_MATLAB = "hard_matlab"
+    SOFT_UNIFORM = "soft_uniform"
+
+    @property
+    def label(self) -> str:
+        return {
+            ThresholdTechnique.HARD: "Hard (all bands)",
+            ThresholdTechnique.SOFT: "Soft (all bands)",
+            ThresholdTechnique.HARD_MATLAB: "Hard + MATLAB bands",
+            ThresholdTechnique.SOFT_UNIFORM: "Soft + keep approx",
+        }[self]
+
+
+DEFAULT_TECHNIQUE = ThresholdTechnique.HARD_MATLAB
+
+TECHNIQUE_BY_ID = {t.value: t for t in ThresholdTechnique}
+
 
 def wavelet_description(wavelet: str = DEFAULT_WAVELET) -> str:
     """Human-readable transform / family label for the UI and report."""
@@ -37,12 +70,44 @@ def wavelet_description(wavelet: str = DEFAULT_WAVELET) -> str:
     elif name.startswith("db") and name[2:].isdigit():
         moments = int(name[2:])
         family = f"Daubechies (db{moments})"
+    elif name.startswith("sym") and name[3:].isdigit():
+        moments = int(name[3:])
+        family = f"Symlet (sym{moments})"
+    elif name.startswith("coif") and name[4:].isdigit():
+        moments = int(name[4:])
+        family = f"Coiflet (coif{moments})"
+    elif name.startswith("bior"):
+        family = f"Biorthogonal ({name})"
+        return f"{DEFAULT_TRANSFORM}: {family}"
     else:
         return f"{DEFAULT_TRANSFORM}: {wavelet}"
     return (
         f"{DEFAULT_TRANSFORM}: {family}, {moments} vanishing moment"
         f"{'' if moments == 1 else 's'}"
     )
+
+
+def max_decomposition_level(n_samples: int, wavelet: str) -> int:
+    return max(1, pywt.dwt_max_level(n_samples, pywt.Wavelet(wavelet).dec_len))
+
+
+def list_input_wavs(directory: str | Path) -> list[Path]:
+    """WAV files available for selection (excludes reconstructed outputs)."""
+    directory = Path(directory)
+    files = sorted(
+        p
+        for p in directory.glob("*.wav")
+        if not p.name.endswith("_reconstructed.wav")
+    )
+    return files
+
+
+def matlab_band_sets(n_levels: int) -> tuple[frozenset[int], frozenset[int]]:
+    """Adapt the MATLAB zero / mid-band policy to the actual decomposition depth."""
+    zero = {1} | {lvl for lvl in range(6, n_levels + 1)}
+    mid = {lvl for lvl in (2, 3, 4, 5) if 1 <= lvl <= n_levels}
+    # Levels neither zeroed nor mid keep their coeffs unchanged (none for L<=5 mid-only).
+    return frozenset(zero), frozenset(mid)
 
 MAGIC = b"WAC1"
 HEADER_FORMAT = "<4sIII16sBBBBI"
@@ -176,32 +241,83 @@ def decompose(
     return pywt.wavedec(samples, wavelet, level=level, mode=mode)
 
 
+def _hard_shrink(band: np.ndarray, threshold: float) -> np.ndarray:
+    out = band.copy()
+    out[np.abs(out) <= threshold] = 0.0
+    return out
+
+
+def _soft_shrink(band: np.ndarray, threshold: float) -> np.ndarray:
+    magnitude = np.abs(band)
+    shrunk = np.sign(band) * np.maximum(magnitude - threshold, 0.0)
+    return shrunk.astype(np.float64, copy=False)
+
+
 def apply_hard_threshold(
     coeffs: list[np.ndarray],
     threshold: float = DEFAULT_THRESHOLD,
     zero_approx: bool = True,
-    zero_detail_levels: frozenset[int] = DEFAULT_ZERO_DETAIL_LEVELS,
-    threshold_detail_levels: frozenset[int] = DEFAULT_THRESHOLD_DETAIL_LEVELS,
+    zero_detail_levels: frozenset[int] | None = None,
+    threshold_detail_levels: frozenset[int] | None = None,
 ) -> list[np.ndarray]:
-    """Hard-threshold wavelet coeffs. Detail level k is coeffs[len-k]."""
-    out: list[np.ndarray] = []
+    """Hard-threshold wavelet coeffs (MATLAB-band helper). Kept for compatibility."""
+    return apply_threshold(
+        coeffs,
+        threshold=threshold,
+        technique=ThresholdTechnique.HARD_MATLAB,
+        zero_approx=zero_approx,
+        zero_detail_levels=zero_detail_levels,
+        threshold_detail_levels=threshold_detail_levels,
+    )
+
+
+def apply_threshold(
+    coeffs: list[np.ndarray],
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    technique: ThresholdTechnique | str = DEFAULT_TECHNIQUE,
+    zero_approx: bool | None = None,
+    zero_detail_levels: frozenset[int] | None = None,
+    threshold_detail_levels: frozenset[int] | None = None,
+) -> list[np.ndarray]:
+    """Apply a selectable thresholding technique to wavelet coefficients."""
+    if isinstance(technique, str):
+        technique = TECHNIQUE_BY_ID[technique]
     n_levels = len(coeffs) - 1
 
+    if technique is ThresholdTechnique.HARD:
+        return [_hard_shrink(band, threshold) for band in coeffs]
+
+    if technique is ThresholdTechnique.SOFT:
+        return [_soft_shrink(band, threshold) for band in coeffs]
+
+    if technique is ThresholdTechnique.SOFT_UNIFORM:
+        out = [coeffs[0].copy()]  # keep approximation
+        out.extend(_soft_shrink(band, threshold) for band in coeffs[1:])
+        return out
+
+    # HARD_MATLAB (and optional overrides)
+    if zero_detail_levels is None or threshold_detail_levels is None:
+        auto_zero, auto_mid = matlab_band_sets(n_levels)
+        if zero_detail_levels is None:
+            zero_detail_levels = auto_zero
+        if threshold_detail_levels is None:
+            threshold_detail_levels = auto_mid
+    if zero_approx is None:
+        zero_approx = True
+
+    out: list[np.ndarray] = []
     if zero_approx:
         out.append(np.zeros_like(coeffs[0]))
     else:
-        approx = coeffs[0].copy()
-        approx[np.abs(approx) <= threshold] = 0.0
-        out.append(approx)
+        out.append(_hard_shrink(coeffs[0], threshold))
 
     for i, band in enumerate(coeffs[1:], start=1):
         detail_level = n_levels - i + 1  # coeffs[1] -> coarsest detail = n_levels
         if detail_level in zero_detail_levels:
             out.append(np.zeros_like(band))
         elif detail_level in threshold_detail_levels:
-            band_new = band.copy()
-            band_new[np.abs(band_new) <= threshold] = 0.0
-            out.append(band_new)
+            out.append(_hard_shrink(band, threshold))
         else:
             out.append(band.copy())
     return out
@@ -441,11 +557,14 @@ def encode_audio(
     level: int = DEFAULT_LEVEL,
     mode: str = DEFAULT_MODE,
     threshold: float = DEFAULT_THRESHOLD,
+    technique: ThresholdTechnique | str = DEFAULT_TECHNIQUE,
     fractional_bits: int = DEFAULT_F,
 ) -> EncodeResult:
     coeffs = decompose(info.samples, wavelet=wavelet, level=level, mode=mode)
     level = len(coeffs) - 1
-    thresholded = apply_hard_threshold(coeffs, threshold=threshold)
+    thresholded = apply_threshold(
+        coeffs, threshold=threshold, technique=technique
+    )
     flat_thr = flatten_coeffs(thresholded)
     y_thr = reconstruct(thresholded, wavelet, mode, info.samples.shape[0])
     snr_thr = snr_db(info.samples, y_thr)
@@ -536,6 +655,12 @@ def run_pipeline(
     *,
     compressed_path: str | Path | None = None,
     reconstructed_path: str | Path | None = None,
+    wavelet: str = DEFAULT_WAVELET,
+    level: int = DEFAULT_LEVEL,
+    mode: str = DEFAULT_MODE,
+    threshold: float = DEFAULT_THRESHOLD,
+    technique: ThresholdTechnique | str = DEFAULT_TECHNIQUE,
+    fractional_bits: int = DEFAULT_F,
 ) -> PipelineResult:
     from .timing import timed
 
@@ -546,21 +671,29 @@ def run_pipeline(
         if reconstructed_path
         else wav_path.with_name(wav_path.stem + "_reconstructed.wav")
     )
+    if isinstance(technique, str):
+        technique = TECHNIQUE_BY_ID[technique]
 
     timings = PipelineTimings()
     info, timings.load_ns = timed(lambda: load_audio(wav_path))
 
     # Split encode timings more finely for the TUI footer.
     coeffs, timings.dwt_ns = timed(
-        lambda: decompose(info.samples)
+        lambda: decompose(info.samples, wavelet=wavelet, level=level, mode=mode)
     )
-    thresholded, timings.threshold_ns = timed(lambda: apply_hard_threshold(coeffs))
+    used_wavelet = wavelet
+    used_level = len(coeffs) - 1
+    thresholded, timings.threshold_ns = timed(
+        lambda: apply_threshold(
+            coeffs, threshold=threshold, technique=technique
+        )
+    )
 
     def _quantize_encode() -> EncodeResult:
         flat_thr = flatten_coeffs(thresholded)
-        y_thr = reconstruct(thresholded, DEFAULT_WAVELET, DEFAULT_MODE, info.samples.shape[0])
+        y_thr = reconstruct(thresholded, used_wavelet, mode, info.samples.shape[0])
         snr_thr = snr_db(info.samples, y_thr)
-        quantized = quantize_coeffs(flat_thr, fractional_bits=DEFAULT_F)
+        quantized = quantize_coeffs(flat_thr, fractional_bits=fractional_bits)
         records = encode_records(quantized)
         payload_bits = int(records.shape[0]) * 24
         header_bits = HEADER_SIZE * 8
@@ -573,10 +706,10 @@ def run_pipeline(
             zero_pct_threshold=zero_percentage(flat_thr),
             zero_pct_quantized=zero_percentage(quantized),
             snr_threshold_db=snr_thr,
-            wavelet=DEFAULT_WAVELET,
-            level=len(thresholded) - 1,
-            mode=DEFAULT_MODE,
-            fractional_bits=DEFAULT_F,
+            wavelet=used_wavelet,
+            level=used_level,
+            mode=mode,
+            fractional_bits=fractional_bits,
             n_samples=info.samples.shape[0],
             sample_rate=info.sample_rate,
             bit_depth=info.bit_depth,
