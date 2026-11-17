@@ -10,20 +10,7 @@ encode / decode / playback, and millisecond stage timings.
 cd audio-compression-demo
 nix shell nixpkgs#uv # only for NixOS, install uv elsewhere on other systems
 uv sync
-uv run python main.py king_injustice.wav
-```
-
-Playback tries `sounddevice`/PortAudio first, then falls back to an external
-player (`pw-play`, `paplay`, `aplay`, `ffplay`, or `mpv`). On this machine
-PipeWire’s `pw-play` is enough; no extra Nix packages are required for that path.
-
-To use PortAudio directly with `sounddevice` on NixOS, enter the optional shell
-so `libportaudio` is on `LD_LIBRARY_PATH`:
-
-```sh
-nix-shell   # uses shell.nix (uv + portaudio)
-uv sync
-uv run python main.py king_injustice.wav
+uv run python main.py
 ```
 
 Batch encode/decode without the TUI (writes `.wac` + reconstructed WAV and
@@ -31,6 +18,8 @@ prints metrics):
 
 ```sh
 uv run python main.py --batch king_injustice.wav
+uv run python main.py --batch speech_clip.wav --wavelet haar --level 5 \
+  --technique soft --threshold 0.2
 ```
 
 Handout encoder examples:
@@ -43,7 +32,10 @@ uv run python main.py --self-test
 
 | Key | Action |
 |-----|--------|
-| `Enter` / `Space` | Run current stage or advance to the next |
+| `↑` / `↓` or `j` / `k` | Move the active selection list |
+| `Tab` | Switch focus (filter↔level, technique↔T) |
+| `←` / `→` or `-` / `+` | Nudge level or threshold preset |
+| `Enter` / `Space` | Run the current stage, or advance to the next |
 | `o` | Play original audio |
 | `p` | Play reconstructed audio |
 | `r` | Reset pipeline |
@@ -51,11 +43,32 @@ uv run python main.py --self-test
 
 Stages: **Input → DWT → Threshold → Encode → Decode → Playback**.
 
+- **Input** — pick any `*.wav` in the demo folder (except `*_reconstructed.wav`).
+- **DWT** — pick filter (`haar`, `db2`, `db4`, `db8`, `sym4`, `coif2`, `bior2.2`) and level.
+- **Threshold** — pick technique and `T` (`0.05`, `0.1`, `0.2`, `0.5`).
+
+Threshold techniques:
+
+| Id | Behavior |
+|----|----------|
+| `hard` | Hard shrink on every band |
+| `soft` | Soft shrink (wavelet shrinkage) on every band |
+| `hard_matlab` | Zero approx + coarse/finest details; hard-shrink mid bands (default) |
+| `soft_uniform` | Keep approximation; soft-shrink all detail bands |
+
+The 24-bit `(count, coeff)` encode format is unchanged; soft thresholding only
+changes which floating-point coefficients are retained before quantization.
+
 The bottom bar reports real-time delay of each stage in milliseconds (`load`,
 `dwt`, `thresh`, `enc`, `write`, `decode`, `idwt`, `wav`), measured with
 `time.perf_counter_ns()` and displayed as ms.
 
 ## Input audio
+
+Selectable clips shipped in this folder include `king_injustice.wav`,
+`speech_clip.wav` (1.5 s excerpt), and any other `*.wav` you drop in.
+
+Default reported results below use `king_injustice.wav`:
 
 | Item | Value |
 |------|-------|
@@ -68,24 +81,23 @@ The bottom bar reports real-time delay of each stage in milliseconds (`load`,
 | Original sample bits | 51 138 × 16 = **818 208** |
 | On-disk size | 14 336 bytes |
 
-Stereo inputs would be mixed to mono before compression; this clip is already
-mono and is used as the reference for all SNR and ratio numbers.
+Stereo inputs are mixed to mono before compression.
 
 ## Wavelet experiment
 
 This demo uses a multilevel **discrete wavelet transform (DWT)** — Mallat’s
-filter-bank decomposition via PyWavelets `wavedec` / `waverec` — with the
-**Daubechies** family wavelet `db4` (4 vanishing moments).
+filter-bank decomposition via PyWavelets `wavedec` / `waverec`. The TUI can
+switch filters and levels; the default report below uses **Daubechies** `db4`.
 
 | Choice | Value | Justification |
 |--------|-------|---------------|
 | Transform | Multilevel **DWT** | Discrete subband structure for thresholding + the 24-bit codec |
-| Family | **Daubechies** (`db4`) | Orthogonal compactly supported wavelets; matches the course MATLAB sketch |
+| Default filter | **Daubechies** (`db4`) | Orthogonal compactly supported wavelets; matches the course MATLAB sketch |
+| Other filters | `haar`, `db2`, `db8`, `sym4`, `coif2`, `bior2.2` | Explore support length / vanishing moments in the DWT stage |
 | Vanishing moments | 4 (`db4`) | Short support with good speech-like energy compaction |
-| Level | 10 | Maximum useful depth for this length; creates many coarse bands that can be zeroed for long runs |
+| Default level | 10 (clamped to max) | Deep decomposition for long zero runs with the MATLAB band policy |
 | Extension | `symmetric` | Stable inverse with PyWavelets `wavedec` / `waverec` |
-| Hard threshold | `T = 0.1` on detail levels 2–5 | Keeps mid-band structure while clearing small coeffs |
-| Zeroed bands | approximation + details 6–10 and detail 1 | Coarse / finest bands contribute little to intelligibility here and become long zero runs |
+| Default technique | `hard_matlab`, `T = 0.1` | Zero approx + details 6…L and 1; hard-threshold mid bands 2–5 |
 
 Reference: [Discrete wavelet transform (Wikipedia)](https://en.wikipedia.org/wiki/Discrete_wavelet_transform).
 
@@ -184,7 +196,9 @@ ratio while keeping speech understandable.
 | `src/codec.py` | DWT, threshold, quantize, 24-bit RLE, `.wac` I/O, SNR |
 | `src/app.py` | Textual staged UI + playback |
 | `src/timing.py` | `perf_counter_ns` helpers |
-| `king_injustice.wav` | Source clip |
+| `king_injustice.wav` | Primary source clip |
+| `speech_clip.wav` | Short selectable excerpt |
+| `*.wav` | Any additional inputs discovered by the Input stage |
 | `king_injustice.wac` | Encoded bitstream |
 | `king_injustice_reconstructed.wav` | Final decoded audio |
 | `audiocompression.m` | MATLAB reference sketch |
