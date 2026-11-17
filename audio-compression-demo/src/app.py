@@ -24,8 +24,8 @@ STAGE_NAMES = (
 )
 
 
-def _fmt_ns(ns: int) -> str:
-    return f"{ns:,} ns"
+def _fmt_ms(ns: int) -> str:
+    return f"{ns / 1_000_000:.3f} ms"
 
 
 def _fmt_snr(snr: float) -> str:
@@ -42,14 +42,14 @@ class MetricsBar(Static):
             self.update(f"[dim]timings: —[/]  {status}")
             return
         parts = [
-            f"load {_fmt_ns(timings.load_ns)}",
-            f"dwt {_fmt_ns(timings.dwt_ns)}",
-            f"thresh {_fmt_ns(timings.threshold_ns)}",
-            f"enc {_fmt_ns(timings.quantize_encode_ns)}",
-            f"write {_fmt_ns(timings.write_ns)}",
-            f"decode {_fmt_ns(timings.decode_ns)}",
-            f"idwt {_fmt_ns(timings.idwt_ns)}",
-            f"wav {_fmt_ns(timings.write_wav_ns)}",
+            f"load {_fmt_ms(timings.load_ns)}",
+            f"dwt {_fmt_ms(timings.dwt_ns)}",
+            f"thresh {_fmt_ms(timings.threshold_ns)}",
+            f"enc {_fmt_ms(timings.quantize_encode_ns)}",
+            f"write {_fmt_ms(timings.write_ns)}",
+            f"decode {_fmt_ms(timings.decode_ns)}",
+            f"idwt {_fmt_ms(timings.idwt_ns)}",
+            f"wav {_fmt_ms(timings.write_wav_ns)}",
         ]
         self.update(
             "[bold cyan]perf[/]  "

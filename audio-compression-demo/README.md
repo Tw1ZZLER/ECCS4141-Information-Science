@@ -2,7 +2,7 @@
 
 Information Science project: a lossy wavelet audio compressor with the required
 24-bit `(zero count, coefficient)` record format, a Textual TUI that walks
-encode / decode / playback, and nanosecond stage timings.
+encode / decode / playback, and millisecond stage timings.
 
 ## Run
 
@@ -51,9 +51,9 @@ uv run python main.py --self-test
 
 Stages: **Input → DWT → Threshold → Encode → Decode → Playback**.
 
-The bottom bar reports real-time delay of each stage in nanoseconds (`load`,
-`dwt`, `thresh`, `enc`, `write`, `decode`, `idwt`, `wav`) using
-`time.perf_counter_ns()`.
+The bottom bar reports real-time delay of each stage in milliseconds (`load`,
+`dwt`, `thresh`, `enc`, `write`, `decode`, `idwt`, `wav`), measured with
+`time.perf_counter_ns()` and displayed as ms.
 
 ## Input audio
 

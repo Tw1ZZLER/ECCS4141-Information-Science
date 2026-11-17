@@ -76,11 +76,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"match:          {dec.coeffs_match_encoded}")
         print(f"wrote:          {result.compressed_path}")
         print(f"wrote:          {result.reconstructed_path}")
+        def _ms(ns: int) -> str:
+            return f"{ns / 1_000_000:.3f}"
+
         print(
-            "timings_ns: "
-            f"load={t.load_ns} dwt={t.dwt_ns} thresh={t.threshold_ns} "
-            f"enc={t.quantize_encode_ns} write={t.write_ns} "
-            f"decode={t.decode_ns} idwt={t.idwt_ns} wav={t.write_wav_ns}"
+            "timings_ms: "
+            f"load={_ms(t.load_ns)} dwt={_ms(t.dwt_ns)} thresh={_ms(t.threshold_ns)} "
+            f"enc={_ms(t.quantize_encode_ns)} write={_ms(t.write_ns)} "
+            f"decode={_ms(t.decode_ns)} idwt={_ms(t.idwt_ns)} wav={_ms(t.write_wav_ns)}"
         )
         return 0 if dec.coeffs_match_encoded else 2
 
