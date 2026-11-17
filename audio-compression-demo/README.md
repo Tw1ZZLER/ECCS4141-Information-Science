@@ -74,16 +74,14 @@ mono and is used as the reference for all SNR and ratio numbers.
 ## Wavelet experiment
 
 This demo uses a multilevel **discrete wavelet transform (DWT)** — Mallat’s
-filter-bank decomposition via PyWavelets `wavedec` / `waverec`. It is **not** a
-continuous wavelet transform (CWT) and **not** a complex discrete wavelet
-transform.
+filter-bank decomposition via PyWavelets `wavedec` / `waverec` — with the
+**Daubechies** family wavelet `db4` (4 vanishing moments).
 
 | Choice | Value | Justification |
 |--------|-------|---------------|
-| Transform | Multilevel **DWT** | Required discrete subband structure for thresholding + the 24-bit codec |
+| Transform | Multilevel **DWT** | Discrete subband structure for thresholding + the 24-bit codec |
 | Family | **Daubechies** (`db4`) | Orthogonal compactly supported wavelets; matches the course MATLAB sketch |
-| Vanishing moments | 4 (`db4`) | Smoother than Haar while still short support for speech-like energy compaction |
-| Not used | **Haar** (`haar` / `db1`) | Haar is the 1-moment Daubechies case; we intentionally use `db4` instead |
+| Vanishing moments | 4 (`db4`) | Short support with good speech-like energy compaction |
 | Level | 10 | Maximum useful depth for this length; creates many coarse bands that can be zeroed for long runs |
 | Extension | `symmetric` | Stable inverse with PyWavelets `wavedec` / `waverec` |
 | Hard threshold | `T = 0.1` on detail levels 2–5 | Keeps mid-band structure while clearing small coeffs |

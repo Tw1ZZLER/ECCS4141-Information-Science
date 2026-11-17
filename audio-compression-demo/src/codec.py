@@ -13,12 +13,8 @@ import soundfile as sf
 # Defaults matching the MATLAB sketch (db4 / level 10 / mid-band threshold).
 #
 # Transform: multilevel Discrete Wavelet Transform (DWT) via Mallat's
-# filter bank (PyWavelets wavedec/waverec) — not a continuous wavelet
-# transform (CWT), and not a complex DWT.
-#
-# Family: Daubechies orthogonal wavelets. ``db4`` has 4 vanishing moments.
-# Haar is the special case ``db1`` (1 vanishing moment); this demo does not
-# use Haar.
+# filter bank (PyWavelets wavedec/waverec).
+# Family: Daubechies orthogonal wavelets; ``db4`` has 4 vanishing moments.
 # See: https://en.wikipedia.org/wiki/Discrete_wavelet_transform
 DEFAULT_WAVELET = "db4"
 DEFAULT_WAVELET_FAMILY = "Daubechies"
@@ -45,7 +41,7 @@ def wavelet_description(wavelet: str = DEFAULT_WAVELET) -> str:
         return f"{DEFAULT_TRANSFORM}: {wavelet}"
     return (
         f"{DEFAULT_TRANSFORM}: {family}, {moments} vanishing moment"
-        f"{'' if moments == 1 else 's'} — not CWT"
+        f"{'' if moments == 1 else 's'}"
     )
 
 MAGIC = b"WAC1"

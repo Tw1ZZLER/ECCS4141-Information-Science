@@ -143,8 +143,7 @@ class AudioCompressionApp(App[None]):
         self.title = "Audio Compression Demo"
         self.sub_title = (
             f"{self.wav_path.name}  ·  "
-            f"{codec.DEFAULT_TRANSFORM} {codec.DEFAULT_WAVELET} "
-            f"(Daubechies, not Haar / not CWT)"
+            f"{codec.DEFAULT_TRANSFORM} {codec.DEFAULT_WAVELET} (Daubechies)"
         )
         self.query_one("#banner", StageBanner).show(0)
         self.query_one("#metrics", MetricsBar).show(self.timings)
@@ -167,8 +166,6 @@ class AudioCompressionApp(App[None]):
             "Family  Daubechies",
             f"Wavelet {codec.DEFAULT_WAVELET} "
             f"({codec.DEFAULT_WAVELET_VANISHING_MOMENTS} vanishing moments)",
-            "Not Haar (haar/db1)",
-            "Not CWT / complex DWT",
         ]
         if status:
             lines.extend(["", f"[bold]Status[/]\n{status}"])
@@ -373,10 +370,6 @@ class AudioCompressionApp(App[None]):
                 f"family [bold]{codec.DEFAULT_WAVELET_FAMILY}[/], "
                 f"code [bold]{codec.DEFAULT_WAVELET}[/]."
             )
-            log.write(
-                "Haar wavelets are [bold]not[/] used (Haar ≡ db1). "
-                "This is [bold]not[/] a continuous wavelet transform (CWT)."
-            )
             log.write("")
             log.write(
                 "Pipeline: DWT → hard threshold → fixed-point quantize → "
@@ -405,13 +398,12 @@ class AudioCompressionApp(App[None]):
             sizes = [c.size for c in self.coeffs]
             log.write("[bold cyan]Stage 2 — Discrete wavelet transform (DWT)[/]")
             log.write("")
-            log.write(f"Kind:           multilevel DWT (not CWT)")
+            log.write("Kind:           multilevel DWT")
             log.write(f"Family:         {codec.DEFAULT_WAVELET_FAMILY} orthogonal")
             log.write(
                 f"Wavelet:        {codec.DEFAULT_WAVELET} "
                 f"({codec.DEFAULT_WAVELET_VANISHING_MOMENTS} vanishing moments)"
             )
-            log.write("Not used:       Haar (haar / db1), CWT, complex DWT")
             log.write(f"Level:          {len(self.coeffs) - 1}")
             log.write(f"Extension:      {codec.DEFAULT_MODE}")
             log.write(f"Coeff vector:   {sum(sizes):,} coefficients")
