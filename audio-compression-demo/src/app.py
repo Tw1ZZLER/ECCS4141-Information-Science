@@ -132,8 +132,9 @@ class AudioCompressionApp(App[None]):
         Binding("minus", "nudge_left", "Nudge-", show=False),
         Binding("plus", "nudge_right", "Nudge+", show=False),
         Binding("=", "nudge_right", "Nudge+", show=False),
-        Binding("tab", "cycle_focus", "Focus", show=True),
-        Binding("shift+tab", "cycle_focus_back", "Focus", show=False),
+        # priority=True so we override Screen's default tab → focus_next.
+        Binding("tab", "cycle_focus", "Focus", show=True, priority=True),
+        Binding("shift+tab", "cycle_focus_back", "Focus", show=False, priority=True),
         Binding("o", "play_original", "Play orig", show=True),
         Binding("p", "play_recon", "Play recon", show=True),
         Binding("r", "reset", "Reset", show=True),
@@ -178,7 +179,7 @@ class AudioCompressionApp(App[None]):
         self.threshold_choices = list(codec.THRESHOLD_PRESETS)
         self.threshold_index = self.threshold_choices.index(codec.DEFAULT_THRESHOLD)
 
-        self.focus = FOCUS_FILE
+        self.sel_focus = FOCUS_FILE
         self.stage = 0
         self.stage_done = False
         self.info: codec.AudioInfo | None = None
@@ -269,7 +270,7 @@ class AudioCompressionApp(App[None]):
     def action_reset(self) -> None:
         self.stage = 0
         self.stage_done = False
-        self.focus = FOCUS_FILE
+        self.sel_focus = FOCUS_FILE
         self.info = None
         self.coeffs = None
         self.thresholded = None
@@ -304,21 +305,21 @@ class AudioCompressionApp(App[None]):
 
     def _set_focus_for_stage(self, stage: int) -> None:
         if stage == 0:
-            self.focus = FOCUS_FILE
+            self.sel_focus = FOCUS_FILE
         elif stage == 1:
-            self.focus = FOCUS_WAVELET
+            self.sel_focus = FOCUS_WAVELET
         elif stage == 2:
-            self.focus = FOCUS_TECHNIQUE
+            self.sel_focus = FOCUS_TECHNIQUE
         else:
-            self.focus = FOCUS_FILE
+            self.sel_focus = FOCUS_FILE
 
     def action_cycle_focus(self) -> None:
         if self.stage_done:
             return
         if self.stage == 1:
-            self.focus = FOCUS_LEVEL if self.focus == FOCUS_WAVELET else FOCUS_WAVELET
+            self.sel_focus = FOCUS_LEVEL if self.sel_focus == FOCUS_WAVELET else FOCUS_WAVELET
         elif self.stage == 2:
-            self.focus = FOCUS_T if self.focus == FOCUS_TECHNIQUE else FOCUS_TECHNIQUE
+            self.sel_focus = FOCUS_T if self.sel_focus == FOCUS_TECHNIQUE else FOCUS_TECHNIQUE
         self._render_stage()
 
     def action_cycle_focus_back(self) -> None:
@@ -340,19 +341,19 @@ class AudioCompressionApp(App[None]):
         if self.stage_done and self.stage < 3:
             # Allow re-picking only before the stage has been run; after run, wait for next.
             return
-        if self.stage == 0 and self.focus == FOCUS_FILE:
+        if self.stage == 0 and self.sel_focus == FOCUS_FILE:
             self.wav_index = (self.wav_index + delta) % len(self.wav_choices)
             self._sync_output_paths()
-        elif self.stage == 1 and self.focus == FOCUS_WAVELET:
+        elif self.stage == 1 and self.sel_focus == FOCUS_WAVELET:
             self.wavelet_index = (self.wavelet_index + delta) % len(self.wavelet_choices)
             self._clamp_level()
-        elif self.stage == 1 and self.focus == FOCUS_LEVEL:
+        elif self.stage == 1 and self.sel_focus == FOCUS_LEVEL:
             self.level = max(1, min(self._max_level(), self.level + delta))
-        elif self.stage == 2 and self.focus == FOCUS_TECHNIQUE:
+        elif self.stage == 2 and self.sel_focus == FOCUS_TECHNIQUE:
             self.technique_index = (
                 self.technique_index + delta
             ) % len(self.technique_choices)
-        elif self.stage == 2 and self.focus == FOCUS_T:
+        elif self.stage == 2 and self.sel_focus == FOCUS_T:
             self.threshold_index = (
                 self.threshold_index + delta
             ) % len(self.threshold_choices)
@@ -365,10 +366,10 @@ class AudioCompressionApp(App[None]):
         if self.stage_done:
             return
         if self.stage == 1:
-            self.focus = FOCUS_LEVEL
+            self.sel_focus = FOCUS_LEVEL
             self.level = max(1, min(self._max_level(), self.level + delta))
         elif self.stage == 2:
-            self.focus = FOCUS_T
+            self.sel_focus = FOCUS_T
             self.threshold_index = (
                 self.threshold_index + delta
             ) % len(self.threshold_choices)
@@ -568,7 +569,7 @@ class AudioCompressionApp(App[None]):
                 log.write(
                     _mark(
                         i == self.wav_index,
-                        self.focus == FOCUS_FILE,
+                        self.sel_focus == FOCUS_FILE,
                         path.name,
                     )
                 )
@@ -600,14 +601,14 @@ class AudioCompressionApp(App[None]):
             max_level = self._max_level()
             log.write("[bold cyan]Stage 2 — Discrete wavelet transform (DWT)[/]")
             log.write("Choose filter and level, then [bold]Enter[/] to run wavedec.")
-            log.write(f"Focus: [bold]{self.focus}[/]  (Tab to switch)")
+            log.write(f"Focus: [bold]{self.sel_focus}[/]  (Tab to switch)")
             log.write("")
             log.write("[bold]Filter[/]")
             for i, name in enumerate(self.wavelet_choices):
                 log.write(
                     _mark(
                         i == self.wavelet_index,
-                        self.focus == FOCUS_WAVELET,
+                        self.sel_focus == FOCUS_WAVELET,
                         f"{name}  —  {codec.wavelet_description(name)}",
                     )
                 )
@@ -616,7 +617,7 @@ class AudioCompressionApp(App[None]):
             log.write(
                 _mark(
                     True,
-                    self.focus == FOCUS_LEVEL,
+                    self.sel_focus == FOCUS_LEVEL,
                     f"{self.level}  (max {max_level} for this signal/filter)",
                 )
             )
@@ -645,14 +646,14 @@ class AudioCompressionApp(App[None]):
         if self.stage == 2 and not self.stage_done:
             log.write("[bold cyan]Stage 3 — Thresholding[/]")
             log.write("Choose technique and T, then [bold]Enter[/] to apply.")
-            log.write(f"Focus: [bold]{self.focus}[/]  (Tab to switch)")
+            log.write(f"Focus: [bold]{self.sel_focus}[/]  (Tab to switch)")
             log.write("")
             log.write("[bold]Technique[/]")
             for i, tech in enumerate(self.technique_choices):
                 log.write(
                     _mark(
                         i == self.technique_index,
-                        self.focus == FOCUS_TECHNIQUE,
+                        self.sel_focus == FOCUS_TECHNIQUE,
                         f"{tech.value}  —  {tech.label}",
                     )
                 )
@@ -662,7 +663,7 @@ class AudioCompressionApp(App[None]):
                 log.write(
                     _mark(
                         i == self.threshold_index,
-                        self.focus == FOCUS_T,
+                        self.sel_focus == FOCUS_T,
                         f"{value}",
                     )
                 )
